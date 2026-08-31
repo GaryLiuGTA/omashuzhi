@@ -109,6 +109,7 @@ Item {
     try {
       root.lastResult = JSON.parse(json)
       root.lastRunAt = Date.now()
+      root.lastRunEpoch = root.lastRunAt
       root.lastError = ""
     } catch (e) {
       // Malformed RESULT: keep the previous result rather than clobber it.
@@ -144,6 +145,80 @@ Item {
         root.lastError = root.elideStderr(root._stderrBuffer) || "worker exited " + exitCode
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scheduling
+  // ---------------------------------------------------------------------------
+  //
+  // A 60s tick compares now against the last-run epoch. It is not a single
+  // long Timer of updateIntervalMin*60000: a QTimer does not compensate for
+  // suspend/resume, so a laptop asleep for three hours would fire once on
+  // resume and then drift. A steady tick re-derives the delta on every pass.
+  //
+  // The last-run epoch is discovered, not stored: parsed from the newest PNG
+  // filename in the worker's cache (wallpaper-<theme>-<epoch>.png). On a
+  // fresh install the cache does not exist — absent or unparseable means
+  // "due", firing once after the startup grace.
+  readonly property double serviceStart: Date.now()
+  readonly property int startupGraceMs: 45000
+  property double lastRunEpoch: 0
+
+  readonly property string cacheDir: Quickshell.env("HOME") + "/.cache/omashuzhi"
+
+  // The worker runs the scheduler after a successful run and parseWorkerOutput
+  // sets lastRunEpoch itself; this probe only matters across a shell restart,
+  // where the freshest PNG still carries its epoch.
+  function discoverLastRunEpoch() {
+    probeProc.command = [
+      "bash", "-c",
+      "ls -1t \"" + root.cacheDir + "\"/wallpaper-*.png 2>/dev/null | head -1"
+    ]
+    probeProc.running = true
+  }
+
+  function applyDiscovery(raw) {
+    var text = String(raw || "").trim()
+    var m = text.match(/wallpaper-(?:dark|light)-(\d+)\.png$/)
+    if (m && m[1]) {
+      var epoch = Number(m[1])
+      if (epoch > 0) root.lastRunEpoch = epoch
+    }
+  }
+
+  Process {
+    id: probeProc
+    command: []
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyDiscovery(String(text || ""))
+    }
+  }
+
+  function checkScheduled() {
+    if (!root.entry) return // not known yet, not "all defaults"
+    var interval = root.updateIntervalMin
+    if (interval <= 0) return // off
+    if (Date.now() - root.serviceStart < root.startupGraceMs) return
+    var due = root.lastRunEpoch <= 0 || Date.now() - root.lastRunEpoch >= interval * 60000
+    if (due) root.refresh()
+  }
+
+  Timer {
+    id: probeTimer
+    interval: 2000
+    repeat: false
+    running: true
+    onTriggered: root.discoverLastRunEpoch()
+  }
+
+  Timer {
+    id: scheduleTimer
+    interval: 60000
+    repeat: true
+    running: true
+    onTriggered: root.checkScheduled()
   }
 
   function status() {
