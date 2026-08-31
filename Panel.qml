@@ -21,6 +21,12 @@ Panel {
   readonly property color dim: Qt.darker(root.fg, 1.4)
   readonly property string fFamily: bar ? bar.fontFamily : Style.font.family
 
+  // Effective UI language: an explicit choice, else Qt.locale()-based auto.
+  // It switches only this popup's strings — the poem on the wallpaper is
+  // untouched, and the worker never receives the language setting.
+  readonly property string uiLanguage: Model.normalizedLanguage(root.setting("language", null), Model.defaultLanguage(Qt.locale().name))
+  readonly property var langCfg: Model.langConfig(root.uiLanguage)
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -73,10 +79,10 @@ Panel {
   readonly property bool statusBusy: service ? service.busy === true : false
   readonly property bool statusFailed: service ? !!service.lastError && service.lastError !== "already running" : false
   readonly property string statusText: {
-    if (statusBusy) return "Generating…"
-    if (statusFailed) return String(service.lastError || "Generation failed")
-    if (service && service.lastResult) return Model.metaLine(service.lastResult, service.lastRunAt)
-    return "Never generated"
+    if (statusBusy) return root.langCfg.statusGenerating
+    if (statusFailed) return String(service.lastError || root.langCfg.statusGenerating)
+    if (service && service.lastResult) return Model.metaLine(service.lastResult, service.lastRunAt, root.uiLanguage)
+    return root.langCfg.statusNever
   }
   readonly property color statusColor: {
     if (statusBusy || (service && service.lastResult)) return Color.accent
@@ -92,7 +98,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     centerOnBar: false
-    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(col.implicitHeight + Style.space(8))
 
     onOpenChanged: {
@@ -170,7 +176,7 @@ Panel {
 
               Text {
                 textFormat: Text.PlainText
-                text: "Omashuzhi"
+                text: root.langCfg.title
                 color: root.fg
                 font.family: root.fFamily
                 font.pixelSize: Style.font.title
@@ -214,7 +220,7 @@ Panel {
           Button {
             id: refreshButton
             width: parent.width
-            text: "Refresh now"
+            text: root.langCfg.refreshNow
             iconText: "󰑐"
             iconSpinning: root.statusBusy
             bordered: true
@@ -231,7 +237,7 @@ Panel {
           }
 
           PanelSectionHeader {
-            text: "WALLPAPER"
+            text: root.langCfg.sectionWallpaper
             foreground: root.fg
             fontFamily: root.fFamily
           }
@@ -239,7 +245,7 @@ Panel {
           // ---- Wallpaper theme --------------------------------------------
           Text {
             textFormat: Text.PlainText
-            text: "Wallpaper theme"
+            text: root.langCfg.themeLabel
             color: root.dim
             font.family: root.fFamily
             font.pixelSize: Style.font.caption
@@ -250,9 +256,9 @@ Panel {
             id: themeGroup
             width: parent.width
             options: [
-              { value: "dark", label: "Dark" },
-              { value: "light", label: "Light" },
-              { value: "random", label: "Random" }
+              { value: "dark", label: root.langCfg.themeDark },
+              { value: "light", label: root.langCfg.themeLight },
+              { value: "random", label: root.langCfg.themeRandom }
             ]
             value: String(root.setting("theme", "dark"))
             foreground: root.fg
@@ -272,7 +278,7 @@ Panel {
           // ---- Text layout ------------------------------------------------
           Text {
             textFormat: Text.PlainText
-            text: "Text layout"
+            text: root.langCfg.layoutLabel
             color: root.dim
             font.family: root.fFamily
             font.pixelSize: Style.font.caption
@@ -283,8 +289,8 @@ Panel {
             id: orientationGroup
             width: parent.width
             options: [
-              { value: "horizontal", label: "Horizontal" },
-              { value: "vertical", label: "Vertical" }
+              { value: "horizontal", label: root.langCfg.layoutHorizontal },
+              { value: "vertical", label: root.langCfg.layoutVertical }
             ]
             value: String(root.setting("orientation", "vertical"))
             foreground: root.fg
@@ -297,8 +303,8 @@ Panel {
           Dropdown {
             id: sketchDropdown
             width: parent.width
-            label: "Sketch"
-            options: Model.sketchOptions(String(root.setting("theme", "dark")))
+            label: root.langCfg.sketchLabel
+            options: Model.sketchOptions(String(root.setting("theme", "dark")), root.uiLanguage)
             value: Model.migrateSketch(String(root.setting("sketch", "random")), String(root.setting("theme", "dark")))
             fontFamily: root.fFamily
             onChanged: function(v) { root.persistSettings({ sketch: v }) }
@@ -313,7 +319,7 @@ Panel {
               id: fontSizeField
               width: (parent.width - parent.spacing) / 2
               fieldWidth: width
-              label: "Font size"
+              label: root.langCfg.fontSizeLabel
               from: 8
               to: 512
               stepSize: 2
@@ -328,7 +334,7 @@ Panel {
               id: intervalField
               width: (parent.width - parent.spacing) / 2
               fieldWidth: width
-              label: "Refresh every (min)"
+              label: root.langCfg.intervalLabel
               from: 0
               to: 1440
               stepSize: 5
@@ -347,7 +353,7 @@ Panel {
           }
 
           PanelSectionHeader {
-            text: "FONTS · ONE IS PICKED AT RANDOM EACH REFRESH"
+            text: root.langCfg.sectionFonts
             foreground: root.fg
             fontFamily: root.fFamily
           }
@@ -356,8 +362,8 @@ Panel {
           MultiSelect {
             id: fontSelect
             width: parent.width
-            label: "Installed families"
-            placeholderText: "Search fonts…"
+            label: root.langCfg.installedLabel
+            placeholderText: root.langCfg.searchPlaceholder
             options: []
             values: []
             optionsCommand: []
@@ -369,7 +375,7 @@ Panel {
             textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Removal matters for hand-typed names — installed families are always re-offered on scan."
+            text: root.langCfg.removalCaption
             color: root.dim
             font.family: root.fFamily
             font.pixelSize: Style.font.caption
@@ -401,7 +407,7 @@ Panel {
                 id: missingTag
                 textFormat: Text.PlainText
                 visible: parent.scanned && !parent.installed
-                text: "not installed"
+                text: root.langCfg.notInstalled
                 color: Color.urgent
                 font.family: root.fFamily
                 font.pixelSize: Style.font.caption
@@ -435,7 +441,7 @@ Panel {
             TextField {
               id: addFontField
               width: parent.width - addButton.implicitWidth - parent.spacing
-              placeholderText: "Add a font by name…"
+              placeholderText: root.langCfg.addPlaceholder
               foreground: root.fg
               accent: Color.accent
               font.family: root.fFamily
@@ -444,7 +450,7 @@ Panel {
 
             Button {
               id: addButton
-              text: "Add"
+              text: root.langCfg.addButton
               bordered: true
               foreground: root.fg
               accent: Color.accent
@@ -463,8 +469,8 @@ Panel {
           Toggle {
             id: showColorToggle
             width: parent.width
-            label: "Show colour name"
-            description: "Wave sketch only"
+            label: root.langCfg.showColorLabel
+            description: root.langCfg.showColorDesc
             checked: root.setting("showColor", false) === true
             foreground: root.fg
             accent: Color.accent
@@ -475,8 +481,8 @@ Panel {
           Toggle {
             id: setWallpaperToggle
             width: parent.width
-            label: "Set as wallpaper"
-            description: "Off: render the PNG only"
+            label: root.langCfg.setWallpaperLabel
+            description: root.langCfg.setWallpaperDesc
             checked: root.setting("setWallpaper", true) !== false
             foreground: root.fg
             accent: Color.accent
@@ -494,13 +500,13 @@ Panel {
           Dropdown {
             id: languageDropdown
             width: parent.width
-            label: "Language"
+            label: root.langCfg.languageLabel
             options: [
               { value: "zh-Hans", label: "简体中文" },
               { value: "zh-Hant", label: "繁體中文" },
               { value: "en", label: "English" }
             ]
-            value: String(root.setting("language", ""))
+            value: root.uiLanguage
             fontFamily: root.fFamily
             onChanged: function(v) { root.persistSettings({ language: v }) }
           }
