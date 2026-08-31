@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "id": "garyliu.omashuzhi-wallpaper",
+  "name": "Omashuzhi(数枝)",
+  "version": "1.0.0",
+  "author": "Gary Liu",
+  "license": "GPL-3.0-or-later",
+  "description": "Chinese-poetry wallpapers for Omarchy, with live settings and refresh.",
+  "homepage": "https://github.com/GaryLiuGTA/omashuzhi",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Omashuzhi(数枝)",
+    "description": "Renders a Chinese-poetry wallpaper and sets it as the desktop background.",
+    "category": "Appearance",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "theme": "dark",
+      "orientation": "vertical",
+      "sketch": "random",
+      "fonts": ["Serif"],
+      "fontSize": 96,
+      "showColor": false,
+      "setWallpaper": true,
+      "updateIntervalMin": 30,
+      "language": ""
+    },
+    "schema": [
+      {
+        "key": "theme",
+        "type": "enum",
+        "label": "Wallpaper theme",
+        "options": ["dark", "light", "random"],
+        "defaultValue": "dark",
+        "description": "The wallpaper's colour palette, not the popup's."
+      },
+      {
+        "key": "orientation",
+        "type": "enum",
+        "label": "Text layout",
+        "options": ["horizontal", "vertical"],
+        "defaultValue": "vertical",
+        "description": "Which way the poem runs on the wallpaper."
+      },
+      {
+        "key": "sketch",
+        "type": "enum",
+        "label": "Sketch",
+        "options": ["wave", "blob", "oval", "tree", "cloud", "random"],
+        "defaultValue": "random",
+        "description": "Background drawing behind the poem."
+      },
+      {
+        "key": "fontSize",
+        "type": "integer",
+        "label": "Font size (pt)",
+        "min": 8,
+        "max": 512,
+        "step": 1,
+        "defaultValue": 96
+      },
+      {
+        "key": "showColor",
+        "type": "boolean",
+        "label": "Show color name",
+        "defaultValue": false,
+        "description": "Paint the colour's Chinese name on the Wave sketch."
+      },
+      {
+        "key": "setWallpaper",
+        "type": "boolean",
+        "label": "Set wallpaper",
+        "defaultValue": true,
+        "description": "False renders a PNG only and leaves the background untouched."
+      },
+      {
+        "key": "updateIntervalMin",
+        "type": "integer",
+        "label": "Update interval (minutes)",
+        "min": 0,
+        "max": 1440,
+        "step": 1,
+        "defaultValue": 30,
+        "description": "0 disables scheduled refreshes."
+      },
+      {
+        "key": "language",
+        "type": "string",
+        "label": "Interface language",
+        "defaultValue": "",
+        "description": "zh-Hans, zh-Hant, en, or empty for automatic."
+      }
+    ]
+  }
+}
