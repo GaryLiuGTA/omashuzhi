@@ -157,6 +157,7 @@ Item {
       showColor: root.showColor,
       setWallpaper: root.setWallpaper,
       updateIntervalMin: root.updateIntervalMin,
+      language: root.language,
       lastResult: root.lastResult,
       lastError: root.lastError,
       lastRunAt: root.lastRunAt
