@@ -1,6 +1,6 @@
 #!/usr/bin/env -S gjs -m
 // SPDX-License-Identifier: GPL-3.0-or-later
-// hypr-shuzhi: Generate wallpapers with Chinese poetry for Hyprland
+// omashuzhi: Generate wallpapers with Chinese poetry (Omarchy 4.0 plugin worker)
 
 import GLib from 'gi://GLib?version=2.0';
 import Gio from 'gi://Gio?version=2.0';
@@ -12,14 +12,23 @@ import * as Draw from './draw.js';
 import * as Motto from './motto.js';
 import { Palette } from './color.js';
 
+const STATE_BACKGROUND = GLib.build_filenamev([
+  GLib.get_home_dir(), '.local', 'state', 'omarchy', 'current', 'background',
+]);
 
 const Sketch = { WAVE: 0, BLOB: 1, OVAL: 2, TREE: 3, CLOUD: 4 };
 const SKETCH_MAP = {
   wave: Sketch.WAVE, blob: Sketch.BLOB, oval: Sketch.OVAL,
   tree: Sketch.TREE, cloud: Sketch.CLOUD,
 };
+const SKETCH_NAMES = ['wave', 'blob', 'oval', 'tree', 'cloud'];
 const DARK_SKETCHES = [Sketch.WAVE, Sketch.BLOB, Sketch.OVAL, Sketch.CLOUD];
 const LIGHT_SKETCHES = [Sketch.WAVE, Sketch.BLOB, Sketch.OVAL, Sketch.TREE];
+
+function die(msg) {
+  printerr(msg);
+  imports.system.exit(1);
+}
 
 function getMonitorSize() {
   // Retry a few times — after boot, Hyprland may not have configured monitors yet
@@ -56,49 +65,20 @@ function getSketchModule(idx, dark) {
   }
 }
 
-function getOmarchyStateDir() {
-  // Omarchy moved the theme/background "current" state from ~/.config/omarchy to
-  // ~/.local/state/omarchy. Check for the "current" subdir itself, not just the
-  // parent omarchy dir — older installs can already have ~/.local/state/omarchy
-  // (e.g. for migrations/toggles bookkeeping) without "current" having moved there.
-  let newBase = GLib.build_filenamev([GLib.get_home_dir(), '.local', 'state', 'omarchy']);
-  let newCurrent = GLib.build_filenamev([newBase, 'current']);
-  if (GLib.file_test(newCurrent, GLib.FileTest.IS_DIR)) return newBase;
-  return GLib.build_filenamev([GLib.get_home_dir(), '.config', 'omarchy']);
-}
-
 function setWallpaper(pngPath) {
-  let bgLink = GLib.build_filenamev([getOmarchyStateDir(), 'current', 'background']);
-
   // Remove existing symlink/file and create new symlink
-  let linkFile = Gio.File.new_for_path(bgLink);
+  let linkFile = Gio.File.new_for_path(STATE_BACKGROUND);
   try { linkFile.delete(null); } catch (e) { /* ok */ }
   linkFile.make_symbolic_link(pngPath, null);
 
   // Omarchy >= 4.0 renders the background via the omarchy-shell (Quickshell), not swaybg.
-  // The shell's background plugin also polls the symlink, but nudging it via IPC avoids the
-  // visible delay. Invoked via absolute path since keybind-triggered execs run under Hyprland's
-  // own $PATH, which doesn't include /usr/share/omarchy/bin.
+  // Invoked via absolute path since keybind-triggered execs run under Hyprland's own $PATH,
+  // which doesn't include /usr/share/omarchy/bin. No -q: it masks failures (omarchy-shell -q
+  // exits 0 on every failure path), so exit(3) here means "shell down / not ready".
   try {
-    T.execute(`/usr/bin/omarchy-shell -q background set ${GLib.shell_quote(pngPath)}`);
-    return;
-  } catch (e) { /* fall through to swaybg on older Omarchy or if the shell isn't running */ }
-
-  // Omarchy < 4.0: restart swaybg via hyprctl so it runs under the compositor
-  try {
-    T.execute('pkill -x swaybg || true');
-  } catch (e) { /* ok if swaybg isn't running */ }
-
-  try {
-    T.execute(`hyprctl dispatch exec -- swaybg -i ${GLib.shell_quote(bgLink)} -m fill`);
+    T.execute(`/usr/bin/omarchy-shell background set ${GLib.shell_quote(pngPath)}`);
   } catch (e) {
-    logError(e, 'Failed to restart swaybg');
-    // Fallback: try spawning directly
-    try {
-      GLib.spawn_command_line_async(`swaybg -i ${GLib.shell_quote(bgLink)} -m fill`);
-    } catch (e2) {
-      logError(e2, 'Failed to start swaybg');
-    }
+    imports.system.exit(3);
   }
 }
 
@@ -108,9 +88,39 @@ function resolveTheme(config) {
   return theme === 'dark';
 }
 
+function pruneCache(cacheDir, prefix) {
+  // Never delete whichever file the live background symlink currently resolves to —
+  // deleting it out from under the link leaves a dangling link (black desktop).
+  let livePath = null;
+  try {
+    livePath = T.execute(`readlink -f ${GLib.shell_quote(STATE_BACKGROUND)}`);
+  } catch (e) { /* no live link yet — nothing to protect */ }
+
+  let dir = Gio.File.new_for_path(cacheDir);
+  let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+  let info;
+  let candidates = [];
+  while ((info = enumerator.next_file(null))) {
+    let name = info.get_name();
+    if (name.startsWith(prefix)) candidates.push(name);
+  }
+
+  // Filenames are wallpaper-<theme>-<epoch>.png; the epoch is fixed-width, so lexical
+  // ordering is chronological. Keep the newest, plus the live file, drop the rest.
+  candidates.sort();
+  let newest = candidates.length ? candidates[candidates.length - 1] : null;
+  for (let name of candidates) {
+    let path = GLib.build_filenamev([cacheDir, name]);
+    if (name === newest) continue;
+    if (livePath && path === livePath) continue;
+    GLib.unlink(path);
+  }
+}
+
 function generate(config) {
   let dark = resolveTheme(config);
-  let level = config.level ?? true; // true = horizontal, false = vertical
+  let orientation = config.orientation ?? (config.level != null ? (config.level ? 'horizontal' : 'vertical') : 'horizontal');
+  let level = orientation !== 'vertical';
   let fonts = config.font;
   let fontName = Array.isArray(fonts) ? T.lot(fonts) : (fonts || 'Serif');
   let fontSize = config.fontSize ?? 36;
@@ -151,40 +161,35 @@ function generate(config) {
   Draw.paint(Draw.Motto, cr, mottoLayout, host);
 
   // 5. Write PNG
-  let cacheDir = GLib.build_filenamev([GLib.get_home_dir(), '.cache', 'hypr-shuzhi']);
+  let cacheDir = GLib.build_filenamev([GLib.get_home_dir(), '.cache', 'omashuzhi']);
   T.ensureDir(cacheDir);
   let prefix = `wallpaper-${dark ? 'dark' : 'light'}`;
   let pngPath = GLib.build_filenamev([cacheDir, `${prefix}-${Date.now()}.png`]);
   surface.writeToPNG(pngPath);
   cr.$dispose();
 
-  // Each generation needs a distinct filename: the Omarchy background plugin
-  // dedupes "set" requests by exact path, so reusing the same path for a
-  // regenerated image would make the switch silently no-op. Prune the old
-  // ones for this mode now that the new file is written. Skip this with
-  // --no-set: the currently active wallpaper may share this prefix, and
-  // deleting it out from under the "current/background" symlink leaves a
-  // dangling link (black background) even though we never touched it.
-  if (config.setWallpaper) {
-    let dir = Gio.File.new_for_path(cacheDir);
-    let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
-    let info;
-    while ((info = enumerator.next_file(null))) {
-      let name = info.get_name();
-      if (name.startsWith(prefix) && name !== GLib.path_get_basename(pngPath)) {
-        GLib.unlink(GLib.build_filenamev([cacheDir, name]));
-      }
-    }
-  }
+  // Each generation needs a distinct filename: the Omarchy background plugin dedupes "set"
+  // requests by exact path, so reusing a path would make the switch silently no-op. Prune
+  // unconditionally (not gated on setWallpaper): keep the newest file per theme prefix plus
+  // whatever the live background resolves to, so the cache never grows one PNG per run.
+  pruneCache(cacheDir, prefix);
 
   print(`Generated: ${pngPath} (${W}x${H})`);
-  return pngPath;
+  return {
+    png: pngPath,
+    w: W,
+    h: H,
+    theme: dark ? 'dark' : 'light',
+    sketch: SKETCH_NAMES[sketchIdx],
+    font: fontName,
+  };
 }
 
 function parseArgs() {
   let config = {
     theme: 'random',
     level: true,
+    orientation: 'horizontal',
     sketch: 'random',
     font: ['Serif'],
     fontSize: 36,
@@ -192,53 +197,78 @@ function parseArgs() {
     setWallpaper: true,
   };
 
-  // Try to load config file
-  let configPath = GLib.build_filenamev([
-    GLib.path_get_dirname(GLib.path_get_dirname(import.meta.url.slice(7))),
-    'config.json',
-  ]);
-  try {
-    let loaded = T.readJSON(configPath);
-    Object.assign(config, loaded);
-  } catch (e) { /* no config file, use defaults */ }
-
-  // Parse CLI args
+  // Opt-in --config <path>. Parsed first so its values are a base that explicit CLI flags
+  // always override, regardless of argument order.
   for (let i = 0; i < ARGV.length; i++) {
-    switch (ARGV[i]) {
-      case '--light': config.theme = 'light'; break;
-      case '--dark': config.theme = 'dark'; break;
-      case '--random': config.theme = 'random'; break;
-      case '--vertical': config.level = false; break;
-      case '--horizontal': config.level = true; break;
-      case '--no-set': config.setWallpaper = false; break;
-      case '--sketch':
-        config.sketch = ARGV[++i] || 'random';
-        break;
-      case '--font':
-        config.font = ARGV[++i] || config.font;
-        break;
-      case '--font-size':
-        config.fontSize = parseInt(ARGV[++i]) || config.fontSize;
-        break;
-      case '--show-color': config.showColor = true; break;
-      case '--help':
-        print(`hypr-shuzhi - Generate wallpapers with Chinese poetry
+    if (ARGV[i] === '--config') {
+      let path = ARGV[i + 1];
+      if (path === undefined || path.startsWith('--')) die('--config requires a file path');
+      try {
+        Object.assign(config, T.readJSON(path));
+      } catch (e) {
+        die(`failed to load config file ${path}: ${e.message ?? e}`);
+      }
+      break;
+    }
+  }
 
-Usage: gjs -m src/main.js [OPTIONS]
+  for (let i = 0; i < ARGV.length; i++) {
+    let a = ARGV[i];
+    // fetch the next token as this flag's value, dying if missing
+    let take = () => {
+      let v = ARGV[++i];
+      if (v === undefined || v.startsWith('--')) die(`missing value for ${a}`);
+      return v;
+    };
+    switch (a) {
+      case '--theme': {
+        let v = take();
+        if (v !== 'dark' && v !== 'light' && v !== 'random') die(`--theme must be dark, light or random, got: ${v}`);
+        config.theme = v;
+        break;
+      }
+      case '--orientation': {
+        let v = take();
+        if (v !== 'horizontal' && v !== 'vertical') die(`--orientation must be horizontal or vertical, got: ${v}`);
+        config.orientation = v;
+        config.level = v !== 'vertical';
+        break;
+      }
+      case '--sketch': config.sketch = take(); break;
+      case '--font': config.font = take(); break;
+      case '--font-size': config.fontSize = parseInt(take(), 10); break;
+      case '--color-font': config.colorFont = take(); break;
+      case '--config': take(); break; // already handled in the pre-scan
+      case '--dark': config.theme = 'dark'; break;
+      case '--light': config.theme = 'light'; break;
+      case '--random': config.theme = 'random'; break;
+      case '--horizontal': config.orientation = 'horizontal'; config.level = true; break;
+      case '--vertical': config.orientation = 'vertical'; config.level = false; break;
+      case '--show-color': config.showColor = true; break;
+      case '--no-show-color': config.showColor = false; break;
+      case '--no-set': config.setWallpaper = false; break;
+      case '--set-wallpaper': config.setWallpaper = true; break;
+      case '--help':
+        print(`omashuzhi - Generate wallpapers with Chinese poetry
+
+Usage: gjs -m worker/main.js [OPTIONS]
 
 Options:
-  --dark           Dark theme (default)
-  --light          Light theme
-  --random         Randomly select dark or light theme
-  --horizontal     Horizontal text layout (default)
-  --vertical       Vertical text layout
-  --sketch TYPE    Sketch type: wave, blob, oval, tree, cloud, random (default)
-  --font FONT      Font family name (overrides config list)
-  --font-size N    Font size in points (default: 36)
-  --show-color     Show color name on Wave sketch
-  --no-set         Generate only, don't set wallpaper
-  --help           Show this help`);
+  --theme MODE       Dark, light or random (default: random)
+  --orientation DIR  horizontal or vertical (default: horizontal)
+  --sketch TYPE      Sketch type: wave, blob, oval, tree, cloud, random (default)
+  --font FONT        Font family name (or a list via --config)
+  --font-size N      Font size in points (default: 36)
+  --color-font DESC  Font for the color watermark on the Wave sketch
+  --show-color       Show color name on the Wave sketch
+  --no-show-color    Do not show the color name (default)
+  --no-set           Generate only, don't set the wallpaper
+  --set-wallpaper    Generate and set the wallpaper (default)
+  --config PATH      Load base settings from a JSON file (CLI flags override it)
+  --help             Show this help`);
         imports.system.exit(0);
+      default:
+        die(`unknown argument: ${a}`);
     }
   }
   return config;
@@ -246,8 +276,9 @@ Options:
 
 // Main
 let config = parseArgs();
-let pngPath = generate(config);
+let result = generate(config);
 if (config.setWallpaper) {
-  setWallpaper(pngPath);
+  setWallpaper(result.png);
   print('Wallpaper updated.');
 }
+print(`RESULT ${JSON.stringify(result)}`);
