@@ -1,78 +1,148 @@
-# hypr-shuzhi — Wallpaper Generator for Hyprland
+# Omashuzhi(数枝) — Chinese-poetry wallpapers for Omarchy
 
-Generate wallpapers featuring Chinese poetry (from jinrishici API) for Arch + Hyprland (Omarchy).
-This is port from https://github.com/tuberry/shuzhi, using Claude Code to migrate to Hyprland in less than 15 min.
+Omashuzhi is a native Omarchy 4.0 plugin that renders a Chinese-poetry wallpaper
+(fetched from the jinrishici API) and sets it as your desktop background. A
+popup on the bar icon edits every setting live — theme, layout, sketch, fonts,
+refresh interval — and a `Refresh now` button re-renders on demand. The
+interface is available in 简体中文 / 繁體中文 / English.
+
+This is a fork of [hypr-shuzhi](https://github.com/GaryLiuGTA/hypr-shuzhi),
+itself a port of the GNOME Shell extension
+[tuberry/shuzhi](https://github.com/tuberry/shuzhi) to Hyprland. Unlike its
+parent, it is a first-class Omarchy plugin: no install script, no systemd timer,
+no hand-edited JSON.
+
 ![shuzhi](screenshots/hypr-shuzhi-3.png)
-## Run
+
+## Install
 
 ```bash
-# One-shot generate and set wallpaper
-gjs -m src/main.js
-
-# Options
-gjs -m src/main.js --light --vertical --sketch wave --font "Serif 48"
-gjs -m src/main.js --no-set    # generate only, don't set wallpaper
-gjs -m src/main.js --help
+omarchy plugin add https://github.com/GaryLiuGTA/omashuzhi.git
+omarchy bar move garyliu.omashuzhi-wallpaper --section right --before omarchy.bluetooth
 ```
 
-## Install & Schedule
+Note that the repo is named `omashuzhi`, but `omarchy plugin add` names the
+install directory from the manifest **id**, so the plugin lands in:
+
+```
+~/.config/omarchy/plugins/garyliu.omashuzhi-wallpaper/
+```
+
+Use that id path in any dev instructions — never the repo name.
+
+## Requirements
+
+- **Omarchy 4.0 or newer. Only.** Pre-4.0 support (swaybg fallback, the old
+  state-dir probe) was removed when this became a plugin.
+- `gjs`, `fontconfig` (`fc-list`), and CJK fonts (e.g. `noto-fonts-cjk`).
+- `jq` is used by `worker/list-fonts.sh` for the font picker.
+
+## Settings
+
+All settings live inline on the widget's `shell.json` entry and are edited from
+the popup (or scalars from the CLI — see the note below).
+
+| key | type | values | default |
+|---|---|---|---|
+| `theme` | string | `dark` \| `light` \| `random` — the **wallpaper's** palette | `dark` |
+| `orientation` | string | `horizontal` \| `vertical` | `vertical` |
+| `sketch` | string | `wave` \| `blob` \| `oval` \| `tree` \| `cloud` \| `random` | `random` |
+| `fonts` | array of strings | Pango family names; one is picked at random each refresh | `["Serif"]` |
+| `fontSize` | integer, pt | 8–512 | 96 |
+| `showColor` | boolean | Wave sketch only — paints the colour's Chinese name | `false` |
+| `setWallpaper` | boolean | `false` = render the PNG only, leave the background alone | `true` |
+| `updateIntervalMin` | integer | `0` = off, otherwise 1–1440 | `30` |
+| `language` | string | `zh-Hans` \| `zh-Hant` \| `en` \| `""` (auto) — popup UI only | `""` |
+
+`sketch` is filtered by `theme`: dark offers Wave/Blob/Oval/**Cloud**, light
+offers Wave/Blob/Oval/**Tree**, and random offers a single theme-dependent
+"Tree / Cloud" entry. The stored value migrates in place on a theme switch
+(`cloud` ⇄ `tree`); the two render identically, so the wallpaper never changes
+as a side effect.
+
+### Editing `fonts`
+
+> **`omarchy bar set … --json` cannot store an array.** A single-element JSON
+> array is unboxed to a string by the IPC layer, and a multi-element one errors
+> out. The **popup is the only supported way to edit `fonts`** — do not rely on
+> the `--json` path for it.
+
+Scalar keys are fine from the CLI:
 
 ```bash
-bash install.sh
-systemctl --user enable --now hypr-shuzhi.timer   # refresh every 30min
+omarchy bar set garyliu.omashuzhi-wallpaper theme light
+omarchy bar set garyliu.omashuzhi-wallpaper fontSize 120
+omarchy bar set garyliu.omashuzhi-wallpaper updateIntervalMin 0
 ```
 
-The refresh interval comes from `updateInterval` in `config.json` (minutes, default `30`). Set it to a
-negative number and re-run `install.sh` to disable scheduling entirely — the timer unit is removed instead
-of installed. With scheduling disabled, refresh the wallpaper manually with:
+## Scheduling
+
+Refreshes are driven by a timer inside the shell, not systemd. A 60-second tick
+compares the current time against the last run (parsed from the newest PNG's
+timestamped filename in `~/.cache/omashuzhi/`), firing when
+`now − lastRun ≥ updateIntervalMin` minutes. `updateIntervalMin: 0` disables it.
+Because the tick re-derives the delta every pass, it survives suspend/resume
+without drift. There is no `.timer` unit — if you migrated from hypr-shuzhi,
+disable and remove the old ones.
+
+Manual refresh for a keybind:
 
 ```bash
-gjs -m ~/.local/share/hypr-shuzhi/src/main.js
+omarchy-shell garyliu.omashuzhi-wallpaper refresh
 ```
 
-## Architecture
+## Migration from hypr-shuzhi
 
-Standalone GJS application. Ported from tuberry/shuzhi GNOME Shell extension.
+1. Stop and remove the old scheduler:
+   ```bash
+   systemctl --user disable --now hypr-shuzhi.timer
+   systemctl --user disable --now hypr-shuzhi.service
+   systemctl --user daemon-reload
+   ```
+2. Remove the old state, then the cache — **in that order**. The live
+   `current/background` symlink still points into the cache, so deleting the
+   cache first dangles the link and blacks the desktop:
+   ```bash
+   rm -rf ~/.local/share/hypr-shuzhi
+   rm -rf ~/.cache/hypr-shuzhi   # delete this LAST
+   ```
+3. Install the plugin and pick your fonts. The shipped default is
+   `["Serif"]`; this machine's ten families, ready to paste into the popup's
+   font picker:
+   ```json
+   ["文道小纂体", "汉仪篆书繁", "汉仪中隶书繁", "Aa宋徽宗瘦金加粗版 (非商业使用)", "站酷庆科黄油体", "余繁新语", "演示佛系体", "钟齐志莽行书", "霞鹜文楷等宽", "得意黑"]
+   ```
 
-### Module Dependency Graph
+## Standalone worker usage
 
+The rendering engine is a headless GJS process, runnable without the shell:
+
+```bash
+gjs -m worker/main.js --help          # all options
+gjs -m worker/main.js --no-set --theme dark --sketch wave --font "霞鹜文楷等宽" --font-size 96
+gjs -m worker/main.js --config /path/to/settings.json   # base settings from a JSON file (CLI flags override)
 ```
-main.js    — Entry point, CLI, wallpaper setting (swaybg + hyprctl)
-  ├─ draw.js    — Cairo drawing engine (5 sketch types + text rendering)
-  ├─ motto.js   — Fetch poetry from jinrishici API via Soup
-  ├─ color.js   — Palette classification (oklch lightness)
-  │   └─ colors.js — 690 Chinese traditional color names + RGB
-  └─ util.js    — Cascade operators ($, $$, $s, $_), HTTP, polyfills
-```
 
-### Wallpaper Pipeline
+It writes timestamped PNGs to `~/.cache/omashuzhi/` and prints a
+machine-readable `RESULT {…}` line after its human output. When the shell is
+running, the service runs it under `flock` so a scheduler tick and a manual
+refresh never render twice.
 
-1. Detect monitor resolution via `hyprctl monitors -j`
-2. Fetch motto from `https://v1.jinrishici.com/all.json`
-3. Create Cairo ImageSurface at native resolution
-4. Paint background → layout motto (Pango) → generate+draw sketch (Cairo) → draw motto
-5. Write PNG to `~/.cache/hypr-shuzhi/wallpaper-{dark|light}.png`
-6. Update symlink `current/background` (`~/.local/state/omarchy` on Omarchy ≥4.0, `~/.config/omarchy` before that) → notify `omarchy-shell` on ≥4.0, or restart `swaybg` on older versions
+## Known limitations
 
-### Sketch Types (draw.js)
+- **A theme switch replaces the wallpaper.** `omarchy-theme-set` owns the same
+  `current/background` symlink, so changing the desktop theme overwrites the
+  Omashuzhi wallpaper until the next refresh.
+- **An uninstalled font family falls back silently** in Pango. The popup flags
+  configured-but-missing families as *not installed* (urgent colour) — that
+  flag is the only way to find out.
+- **`fc-list` emits one row per alias**, so one physical font can appear under
+  both its CJK and Latin names in the picker.
 
-| Sketch | Themes | Description |
-|--------|--------|-------------|
-| Wave   | Both   | 5 layered Bezier curves with color palette |
-| Blob   | Both   | 19 organic polygons on recursive tile grid |
-| Oval   | Both   | 19 rotated/scaled ellipses on tile grid |
-| Tree   | Light  | Fractal binary tree with flowers |
-| Cloud  | Dark   | Moon phase (date-based) + arc-based clouds |
+## Credits
 
-### Dependencies
-
-- `gjs` (GNOME JavaScript) with GI bindings: Cairo, Pango, PangoCairo, Soup3
-- `hyprctl` for monitor detection and process dispatch
-- `omarchy-shell` for wallpaper display on Omarchy ≥4.0, or `swaybg` on older versions
-- `jq` for reading `config.json` during install
-- CJK fonts (e.g., noto-fonts-cjk)
-
-### Courtesy
-
-* https://github.com/tuberry/shuzhi for source logic
-* https://github.com/xenv/gushici for Chinese poetry API
+This project is a port of
+[**tuberry/shuzhi**](https://github.com/tuberry/shuzhi) — the original GNOME
+Shell extension by Tuberry — and depends on
+[**xenv/gushici**](https://github.com/xenv/gushici), which powers the
+`v1.jinrishici.com` API that `worker/motto.js` uses. Thank you both.
