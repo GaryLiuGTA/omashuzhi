@@ -78,6 +78,7 @@ function setWallpaper(pngPath) {
   try {
     T.execute(`/usr/bin/omarchy-shell background set ${GLib.shell_quote(pngPath)}`);
   } catch (e) {
+    logError(e, 'omarchy-shell background set failed');
     imports.system.exit(3);
   }
 }
@@ -234,9 +235,20 @@ function parseArgs() {
         config.level = v !== 'vertical';
         break;
       }
-      case '--sketch': config.sketch = take(); break;
+      case '--sketch': {
+        let v = take();
+        if (!(v in SKETCH_MAP) && v !== 'random') die(`--sketch must be wave, blob, oval, tree, cloud or random, got: ${v}`);
+        config.sketch = v;
+        break;
+      }
       case '--font': config.font = take(); break;
-      case '--font-size': config.fontSize = parseInt(take(), 10); break;
+      case '--font-size': {
+        let v = take();
+        let n = parseInt(v, 10);
+        if (!/^\d+$/.test(v) || Number.isNaN(n) || n < 8 || n > 512) die(`--font-size must be an integer in 8..512, got: ${v}`);
+        config.fontSize = n;
+        break;
+      }
       case '--color-font': config.colorFont = take(); break;
       case '--config': take(); break; // already handled in the pre-scan
       case '--dark': config.theme = 'dark'; break;

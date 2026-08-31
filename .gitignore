@@ -1,8 +1,4 @@
-*.png
-*.jpg
-*.jpeg
-*.webp
-*.gif
+PLAN.local.md
 
 /cache/
 /dist/
