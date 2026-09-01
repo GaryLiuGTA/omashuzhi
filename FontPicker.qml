@@ -542,7 +542,13 @@ Item {
             readonly property bool selected: root.isSelected(modelData.value)
 
             width: resultList.width
-            height: Math.max(root.popupRowHeight, rowContent.implicitHeight + Style.spacing.rowPaddingX)
+            // Uniform row height, deliberately NOT derived from the row's
+            // implicit height. A ListView whose delegates vary in height only
+            // ESTIMATES contentHeight from the delegates it has realized, so
+            // the estimate drifts every time you scroll — the scrollbar handle
+            // shrinks a little on each drag until the usable range collapses.
+            // Fixed rows make contentHeight exact and stable.
+            height: root.popupRowHeight
             color: index === resultList.currentIndex
               ? Style.hoverFillFor(root.foreground, root.accent)
               : "transparent"
@@ -578,37 +584,64 @@ Item {
                 }
               }
 
-              Column {
-                width: parent.width - checkbox.width - parent.spacing
+              // Single line: family name, with the CJK tag inline on the
+              // right. Keeps every row the same height (see above) and
+              // matches the approved mockup.
+              Text {
+                id: rowLabel
+                text: modelData.label
+                color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.spacing.xxs
+                width: Math.max(0, parent.width - checkbox.width - rowTag.width - parent.spacing * 2)
+              }
 
-                Text {
-                  text: modelData.label
-                  color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
-                  width: parent.width
-                }
-                Text {
-                  visible: text !== ""
-                  text: modelData.description
-                  color: Qt.darker(root.foreground, 1.5)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                  width: parent.width
-                }
+              Text {
+                id: rowTag
+                text: modelData.description
+                visible: text !== ""
+                color: Qt.darker(root.foreground, 1.5)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                anchors.verticalCenter: parent.verticalCenter
               }
             }
 
             MouseArea {
+              id: rowMouse
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onPositionChanged: resultList.currentIndex = parent.index
-              onClicked: root.toggleValue(modelData.value)
+
+              // A click toggles; a DRAG must not. Without this, a press that
+              // begins on a row and then scrolls (or a fast scrollbar drag
+              // whose release lands on a recycled delegate) is delivered as a
+              // click and silently toggles fonts.
+              property real pressX: 0
+              property real pressY: 0
+              property real pressContentY: 0
+              property bool dragged: false
+
+              onPressed: function(mouse) {
+                pressX = mouse.x
+                pressY = mouse.y
+                pressContentY = resultList.contentY
+                dragged = false
+              }
+              onPositionChanged: function(mouse) {
+                if (pressed) {
+                  if (Math.abs(mouse.x - pressX) > 6 || Math.abs(mouse.y - pressY) > 6) dragged = true
+                } else {
+                  resultList.currentIndex = parent.index
+                }
+              }
+              onClicked: function(mouse) {
+                if (dragged) return
+                if (Math.abs(resultList.contentY - pressContentY) > 2) return // list moved under the cursor
+                root.toggleValue(modelData.value)
+              }
             }
           }
         }

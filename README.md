@@ -30,6 +30,28 @@ install directory from the manifest **id**, so the plugin lands in:
 
 Use that id path in any dev instructions — never the repo name.
 
+## Removing
+
+```bash
+omarchy plugin remove garyliu.omashuzhi-wallpaper
+```
+
+That removes the widget from the bar and deletes the plugin directory. The
+plugin keeps no state outside its own directory except two things you may want
+to clean up yourself:
+
+```bash
+rm -rf ~/.cache/omashuzhi          # generated wallpapers
+```
+
+and, if the desktop background is still pointing at a generated image, pick a
+new one with `omarchy-theme-bg-next` (or set any wallpaper) so the
+`current/background` symlink stops referencing the deleted cache.
+
+The plugin installs no systemd units and never writes outside
+`~/.config/omarchy/shell.json` (its own settings entry), `~/.cache/omashuzhi`,
+and the `current/background` symlink it is designed to set.
+
 ## Requirements
 
 - **Omarchy 4.0 or newer. Only.** Pre-4.0 support (swaybg fallback, the old
@@ -146,3 +168,23 @@ This project is a port of
 Shell extension by Tuberry — and depends on
 [**xenv/gushici**](https://github.com/xenv/gushici), which powers the
 `v1.jinrishici.com` API that `worker/motto.js` uses. Thank you both.
+
+## Developing
+
+Clone into `~/.config/omarchy/plugins/garyliu.omashuzhi-wallpaper/` and edit in
+place. Note that saving a file triggers Omarchy's plugin watcher, but the bar
+widget can keep running **stale compiled QML** — a save is not always enough.
+After changing any `.qml`, run:
+
+```bash
+omarchy-restart-shell
+omarchy plugin validate ~/.config/omarchy/plugins/garyliu.omashuzhi-wallpaper
+journalctl --user -t omarchy-shell -f     # QML warnings and errors land here
+```
+
+The renderer is a plain GJS program and can be run on its own, without the
+shell, which is the fastest way to iterate on drawing changes:
+
+```bash
+gjs -m worker/main.js --no-set --theme dark --sketch wave --font-size 96
+```
