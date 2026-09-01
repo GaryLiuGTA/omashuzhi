@@ -45,8 +45,9 @@ rm -rf ~/.cache/omashuzhi          # generated wallpapers
 ```
 
 and, if the desktop background is still pointing at a generated image, pick a
-new one with `omarchy-theme-bg-next` (or set any wallpaper) so the
-`current/background` symlink stops referencing the deleted cache.
+new one from the Omarchy menu under **Style → Background** (or run
+`omarchy-theme-bg-next`) so the `current/background` symlink stops referencing
+the deleted cache.
 
 The plugin installs no systemd units and never writes outside
 `~/.config/omarchy/shell.json` (its own settings entry), `~/.cache/omashuzhi`,
