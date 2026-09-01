@@ -98,6 +98,9 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     centerOnBar: false
+    // A taller bottom margin than Style.gapsOut so the panel never runs flush
+    // to the screen edge and the last control is not jammed against it.
+    margin: Style.space(12)
     contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(col.implicitHeight + Style.space(8))
 
@@ -119,7 +122,6 @@ Panel {
       anchors.fill: parent
       blocked: sketchDropdown.popupOpen
         || fontSelect.popupOpen
-        || languageDropdown.popupOpen
         || addFontField.activeFocus
         || fontSizeField.field.activeFocus
         || intervalField.field.activeFocus
@@ -139,7 +141,7 @@ Panel {
         else if (sketchDropdown.activeFocus) sketchDropdown.toggle()
         else if (showColorToggle.activeFocus) root.persistSettings({ showColor: !root.setting("showColor", false) })
         else if (setWallpaperToggle.activeFocus) root.persistSettings({ setWallpaper: root.setting("setWallpaper", true) === false })
-        else if (languageDropdown.activeFocus) languageDropdown.toggle()
+        else if (languageGroup.activeFocus) languageGroup.activateFocused()
       }
       onTabRequested: function(dir) { root.moveTabFocus(dir) }
 
@@ -497,18 +499,34 @@ Panel {
           }
 
           // ---- Language ----------------------------------------------------
-          Dropdown {
-            id: languageDropdown
+          // A segmented control, not a Dropdown: the shared Dropdown opens its
+          // popup downward with no clamp, and this is the last row of a panel
+          // that can fill the screen — the popup would land off the bottom.
+          Text {
+            textFormat: Text.PlainText
+            text: root.langCfg.languageLabel
+            color: root.dim
+            font.family: root.fFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+
+          ButtonGroup {
+            id: languageGroup
             width: parent.width
-            label: root.langCfg.languageLabel
             options: [
               { value: "zh-Hans", label: "简体中文" },
               { value: "zh-Hant", label: "繁體中文" },
               { value: "en", label: "English" }
             ]
             value: root.uiLanguage
+            foreground: root.fg
+            accent: Color.accent
             fontFamily: root.fFamily
-            onChanged: function(v) { root.persistSettings({ language: v }) }
+            onChanged: function(v) {
+              if (v === String(root.setting("language", ""))) return
+              root.persistSettings({ language: v })
+            }
           }
         }
       }
@@ -544,7 +562,7 @@ Panel {
       themeGroup, orientationGroup, sketchDropdown,
       fontSizeField.field, intervalField.field,
       addFontField, showColorToggle, setWallpaperToggle,
-      languageDropdown
+      languageGroup
     ]
     var focused = -1
     for (var i = 0; i < targets.length; i++) {
