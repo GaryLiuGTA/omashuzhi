@@ -161,7 +161,7 @@ Panel {
         interactive: contentHeight > height
         Column {
           id: col
-          width: scroll.width - (outerBar.visible ? outerBar.width : 0)
+          width: scroll.width - outerBar.width
           spacing: Style.space(14)
 
           // ---- Hero -------------------------------------------------------
@@ -401,13 +401,20 @@ Panel {
 
             Flickable {
               id: fontListScroll
-              width: parent.width - (fontListBar.visible ? fontListBar.width : 0)
+              // Reserve the scrollbar's width unconditionally (a conditional
+              // margin would feed back: width -> contentHeight -> bar.visible
+              // -> width). interactive follows overflow so Flickable's own
+              // wheel/drag handling works — a non-interactive Flickable
+              // ignores wheel events entirely.
+              width: parent.width - fontListBar.width
               height: Math.min(fontListColumn.implicitHeight, root.fontListMaxHeight)
               clip: true
               boundsBehavior: Flickable.StopAtBounds
               contentWidth: width
               contentHeight: fontListColumn.implicitHeight
-              interactive: false
+              interactive: fontListColumn.implicitHeight > height
+              flickDeceleration: 1500
+              maximumFlickVelocity: 2000
 
             Column {
               id: fontListColumn
@@ -464,19 +471,6 @@ Panel {
                     }
                   }
                 }
-              }
-            }
-
-            WheelHandler {
-              id: fontListWheel
-              target: null
-              onWheel: function(event) {
-                var angle = event.angleDelta.y
-                var pixel = event.pixelDelta.y
-                if (angle === 0 && pixel === 0) return
-                var delta = pixel !== 0 ? pixel : angle / 3
-                root.fontListWheelStep(delta)
-                event.accepted = true
               }
             }
           }
@@ -597,25 +591,6 @@ Panel {
   }
 
 
-
-  // Wheel scroll for the selected-fonts list. delta > 0 = wheel up (contentY
-  // decreases), delta < 0 = wheel down. The inner list consumes the wheel
-  // only while it can move in that direction; otherwise the outer panel
-  // scrolls instead.
-  function fontListWheelStep(delta) {
-    var range = fontListScroll.contentHeight - fontListScroll.height
-    var atTop = fontListScroll.contentY <= 0
-    var atBottom = fontListScroll.contentY >= range - 1
-    if (delta > 0 && atTop) {
-      scroll.contentY = Math.max(0, scroll.contentY - delta) // outer scrolls up
-      return
-    }
-    if (delta < 0 && atBottom) {
-      scroll.contentY = Math.min(scroll.contentHeight - scroll.height, scroll.contentY - delta) // outer scrolls down
-      return
-    }
-    fontListScroll.contentY = Math.max(0, Math.min(range, fontListScroll.contentY - delta))
-  }
 
   function fontInstalled(font) {
     return Model.isFontInstalled(font, fontPicker.resolvedOptions)

@@ -18,8 +18,8 @@ Item {
   // Scroll travel is contentHeight MINUS the viewport height — contentY never
   // reaches contentHeight. The handle must be able to reach the track's
   // bottom, so the fraction is measured against the scroll range, not the
-  // content height.
-  readonly property real scrollRange: Math.max(0, target.contentHeight - target.height)
+  // content height. NaN-safe: a zero/negative range yields 0, never NaN.
+  readonly property real scrollRange: { var r = target.contentHeight - target.height; return r > 0 ? r : 0 }
   readonly property real scrollFraction: scrollRange > 0 ? target.contentY / scrollRange : 0
   readonly property real handleY: handle.y
   readonly property real handleHeight: handle.height
@@ -49,6 +49,10 @@ Item {
 
   MouseArea {
     anchors.fill: parent
+    // Keep the grab for the whole drag. Without preventStealing, a fast drag
+    // that briefly leaves the bar can have the grab stolen by a row or the
+    // picker's refresh button, and the press/release lands there instead.
+    preventStealing: true
     onPressed: function(mouse) { root.scrollTo(mouse.y) }
     onPositionChanged: function(mouse) { if (pressed) root.scrollTo(mouse.y) }
   }

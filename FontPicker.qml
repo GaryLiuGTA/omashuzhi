@@ -121,10 +121,16 @@ Item {
     return arr.length + " selected"
   }
 
-  property var filtered: resolvedOptions
+  // `filtered` is deliberately NOT a binding on resolvedOptions: recomputeFiltered
+  // assigns it, which would destroy the binding after the first filter, and
+  // resolvedOptions then changing (a refresh completing, a timeout) would leave
+  // the model stale. It is recomputed explicitly whenever resolvedOptions or
+  // the search text changes instead.
+  property var filtered: []
+  onResolvedOptionsChanged: recomputeFiltered()
   function recomputeFiltered() {
     var q = searchField.text.toLowerCase()
-    if (!q) { filtered = resolvedOptions; return }
+    if (!q) { filtered = resolvedOptions.slice(); return }
     var out = []
     for (var i = 0; i < resolvedOptions.length; i++) {
       var o = resolvedOptions[i]
@@ -176,15 +182,6 @@ Item {
     refreshTimeoutTimer.restart()
   }
 
-  // Wheel scroll for the option list. delta > 0 = wheel up (contentY
-  // decreases), delta < 0 = wheel down. Clamped to [0, scrollRange]; there is
-  // no outer surface to fall through to inside the popup.
-  function resultListWheelStep(delta) {
-    var range = resultList.contentHeight - resultList.height
-    if (range <= 0) return
-    resultList.contentY = Math.max(0, Math.min(range, resultList.contentY - delta))
-  }
-
   Timer {
     id: refreshTimeoutTimer
     interval: root.refreshTimeoutMs
@@ -214,8 +211,10 @@ Item {
         if (optionsProcess.seq !== root.refreshSeq) return
         var result = root.parseCommandOutput(text)
         if (result.error) {
+          // Leave the previous options in place while the scan is bad rather
+          // than blanking the list (root.options is empty for a dynamic scan,
+          // so normalizeAll would wipe it).
           root.optionsError = result.error
-          root.resolvedOptions = root.normalizeAll(root.options)
         } else {
           var combined = root.arrayFrom(root.options)
           for (var j = 0; j < result.options.length; j++) combined.push(result.options[j])
@@ -492,11 +491,18 @@ Item {
 
         ListView {
           id: resultList
+          // Reserve the scrollbar's width unconditionally — a conditional
+          // margin feeds back (width -> delegate layout -> contentHeight ->
+          // bar.visible -> width). The list stays interactive so Flickable's
+          // own wheel/drag handling works.
           anchors.fill: parent
-          anchors.rightMargin: listBar.visible ? listBar.width : 0
+          anchors.rightMargin: listBar.width
           spacing: Style.spacing.labelGap
           clip: true
           boundsBehavior: Flickable.StopAtBounds
+          interactive: true
+          flickDeceleration: 1500
+          maximumFlickVelocity: 2000
           model: root.filtered
           currentIndex: -1
           keyNavigationEnabled: false
@@ -526,18 +532,6 @@ Item {
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                        || event.key === Qt.Key_Space) {
               resultList.toggleCurrent(); event.accepted = true
-            }
-          }
-
-          WheelHandler {
-            target: null
-            onWheel: function(event) {
-              var angle = event.angleDelta.y
-              var pixel = event.pixelDelta.y
-              if (angle === 0 && pixel === 0) return
-              var delta = pixel !== 0 ? pixel : angle / 3
-              root.resultListWheelStep(delta)
-              event.accepted = true
             }
           }
 
