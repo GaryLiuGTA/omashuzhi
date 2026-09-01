@@ -33,53 +33,6 @@ Panel {
   readonly property real fontListSpacing: Style.space(4)
   readonly property real fontListMaxHeight: root.fontRowHeight * 6 + root.fontListSpacing * 5
 
-  // Theme-tinted vertical scrollbar. Plain Rectangles (a stock QQC ScrollBar
-  // does not render inside this shell's layer surfaces), AsNeeded visibility,
-  // click/drag to scroll. Overlays the right edge of `target`; callers
-  // reserve its width so it never covers content.
-  component PanelScrollBar: Item {
-    required property Flickable target
-    readonly property real trackWidth: Style.space(4)
-    width: trackWidth + Style.space(2)
-    visible: target && target.contentHeight > target.height
-    z: 3
-
-    Rectangle {
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(1)
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      width: parent.trackWidth
-      radius: Style.space(2)
-      color: Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.10)
-    }
-
-    Rectangle {
-      id: handle
-      anchors.left: parent.left
-      anchors.leftMargin: Style.space(1)
-      width: parent.trackWidth
-      radius: Style.space(2)
-      color: Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.5)
-      y: parent.target.contentY / Math.max(1, parent.target.contentHeight) * (parent.height - height)
-      height: Math.max(Style.space(8), parent.target.height / Math.max(1, parent.target.contentHeight) * parent.height)
-    }
-
-    MouseArea {
-      anchors.fill: parent
-      onPressed: function(mouse) { parent.scrollTo(mouse.y) }
-      onPositionChanged: function(mouse) { if (pressed) parent.scrollTo(mouse.y) }
-    }
-
-    function scrollTo(my) {
-      var t = target
-      var range = t.contentHeight - t.height
-      if (range <= 0) return
-      var frac = (my - handle.height / 2) / Math.max(1, parent.height - handle.height)
-      t.contentY = Math.max(0, Math.min(range, frac * range))
-    }
-  }
-
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -159,14 +112,14 @@ Panel {
 
     onOpenChanged: {
       if (!panel.open) return
-      // MultiSelect.toggleValue assigns values internally, so a declarative
+      // FontPicker.toggleValue assigns values internally, so a declarative
       // binding would die after the first click; re-sync from settings here.
-      fontSelect.values = Model.asArray(root.setting("fonts", ["Serif"]))
+      fontPicker.values = Model.asArray(root.setting("fonts", ["Serif"]))
       // fc-list must not run at shell startup, once per monitor — arm it on
       // the first popup open instead.
       if (!root._fontScanArmed) {
         root._fontScanArmed = true
-        fontSelect.optionsCommand = ["bash", root.listFontsPath]
+        fontPicker.optionsCommand = ["bash", root.listFontsPath]
       }
     }
 
@@ -174,7 +127,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: sketchDropdown.popupOpen
-        || fontSelect.popupOpen
+        || fontPicker.popupOpen
         || addFontField.activeFocus
         || fontSizeField.field.activeFocus
         || intervalField.field.activeFocus
@@ -414,8 +367,8 @@ Panel {
           }
 
           // ---- Installed families ------------------------------------------
-          MultiSelect {
-            id: fontSelect
+          FontPicker {
+            id: fontPicker
             width: parent.width
             label: root.langCfg.installedLabel
             placeholderText: root.langCfg.searchPlaceholder
@@ -466,7 +419,7 @@ Panel {
 
                 delegate: Row {
                   required property string modelData
-                  readonly property bool scanned: fontSelect.resolvedOptions.length > 0
+                  readonly property bool scanned: fontPicker.resolvedOptions.length > 0
                   readonly property bool installed: root.fontInstalled(modelData)
                   width: parent.width
                   height: root.fontRowHeight
@@ -657,7 +610,7 @@ Panel {
   }
 
   function fontInstalled(font) {
-    return Model.isFontInstalled(font, fontSelect.resolvedOptions)
+    return Model.isFontInstalled(font, fontPicker.resolvedOptions)
   }
 
   function addFont() {
@@ -667,8 +620,8 @@ Panel {
     if (fonts.indexOf(name) === -1) fonts.push(name)
     addFontField.text = ""
     root.persistSettings({ fonts: fonts })
-    fontSelect.values = fonts.slice()
-    fontSelect.refresh()
+    fontPicker.values = fonts.slice()
+    fontPicker.refresh()
   }
 
   function removeFont(name) {
@@ -677,7 +630,7 @@ Panel {
     if (idx === -1) return
     fonts.splice(idx, 1)
     root.persistSettings({ fonts: fonts })
-    fontSelect.values = fonts.slice()
+    fontPicker.values = fonts.slice()
   }
 
   function moveTabFocus(dir) {
