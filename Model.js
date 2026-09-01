@@ -59,10 +59,17 @@ function migrateSketch(sketch, theme) {
   return "tree" // random theme: the "Tree / Cloud" option's value
 }
 
-// `fonts` can arrive as a real array, a single family name (the omarchy-bar
-// --json CLI unboxes one-element arrays into a string), or nothing.
+// `fonts` can arrive as a real JS array, as a QML QVariantList that fails
+// `Array.isArray` (the shell passes settings across the C++/QML boundary as
+// JSValue lists — see MultiSelect.arrayFrom), as a single family name (the
+// omarchy-bar --json CLI unboxes one-element arrays into a string), or nothing.
 function asArray(value) {
   if (Array.isArray(value)) return value.slice()
+  if (value && typeof value === "object" && typeof value.length === "number" && typeof value !== "string") {
+    var out = []
+    for (var i = 0; i < value.length; i++) out.push(value[i])
+    return out
+  }
   if (value === undefined || value === null || value === "") return []
   return [String(value)]
 }

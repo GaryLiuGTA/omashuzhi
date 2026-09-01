@@ -84,7 +84,7 @@ Item {
     args.push("--theme", String(root.theme))
     args.push("--orientation", String(root.orientation))
     args.push("--sketch", String(root.sketch))
-    var families = Array.isArray(root.fonts) ? root.fonts : [root.fonts]
+    var families = Array.isArray(root.fonts) ? root.fonts : (root.fonts && typeof root.fonts.length === "number" ? root.fonts : [root.fonts])
     var font = families.length > 0 ? families[Math.floor(Math.random() * families.length)] : "Serif"
     args.push("--font", String(font))
     args.push("--font-size", String(root.fontSize))

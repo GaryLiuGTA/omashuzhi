@@ -27,6 +27,59 @@ Panel {
   readonly property string uiLanguage: Model.normalizedLanguage(root.setting("language", null), Model.defaultLanguage(Qt.locale().name))
   readonly property var langCfg: Model.langConfig(root.uiLanguage)
 
+  // The selected-fonts list is capped at six rows so a long selection cannot
+  // inflate the whole panel to full screen height.
+  readonly property real fontRowHeight: Style.spacing.controlHeight
+  readonly property real fontListSpacing: Style.space(4)
+  readonly property real fontListMaxHeight: root.fontRowHeight * 6 + root.fontListSpacing * 5
+
+  // Theme-tinted vertical scrollbar. Plain Rectangles (a stock QQC ScrollBar
+  // does not render inside this shell's layer surfaces), AsNeeded visibility,
+  // click/drag to scroll. Overlays the right edge of `target`; callers
+  // reserve its width so it never covers content.
+  component PanelScrollBar: Item {
+    required property Flickable target
+    readonly property real trackWidth: Style.space(4)
+    width: trackWidth + Style.space(2)
+    visible: target && target.contentHeight > target.height
+    z: 3
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(1)
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: parent.trackWidth
+      radius: Style.space(2)
+      color: Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.10)
+    }
+
+    Rectangle {
+      id: handle
+      anchors.left: parent.left
+      anchors.leftMargin: Style.space(1)
+      width: parent.trackWidth
+      radius: Style.space(2)
+      color: Qt.rgba(Color.popups.text.r, Color.popups.text.g, Color.popups.text.b, 0.5)
+      y: parent.target.contentY / Math.max(1, parent.target.contentHeight) * (parent.height - height)
+      height: Math.max(Style.space(8), parent.target.height / Math.max(1, parent.target.contentHeight) * parent.height)
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      onPressed: function(mouse) { parent.scrollTo(mouse.y) }
+      onPositionChanged: function(mouse) { if (pressed) parent.scrollTo(mouse.y) }
+    }
+
+    function scrollTo(my) {
+      var t = target
+      var range = t.contentHeight - t.height
+      if (range <= 0) return
+      var frac = (my - handle.height / 2) / Math.max(1, parent.height - handle.height)
+      t.contentY = Math.max(0, Math.min(range, frac * range))
+    }
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -153,13 +206,13 @@ Panel {
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
-
         Column {
           id: col
-          width: scroll.width
+          width: scroll.width - (outerBar.visible ? outerBar.width : 0)
           spacing: Style.space(14)
 
           // ---- Hero -------------------------------------------------------
+
           Row {
             width: parent.width
             spacing: Style.space(14)
@@ -384,54 +437,116 @@ Panel {
           }
 
           // ---- Selected fonts ----------------------------------------------
-          Repeater {
-            model: Model.asArray(root.setting("fonts", ["Serif"]))
+          // Capped at six rows with its own scroll area, so a long selection
+          // never inflates the whole panel. The wheel handler scrolls this
+          // list only while it can move in that direction, and otherwise
+          // scrolls the outer panel instead (a wheel that dead-ends here while
+          // the outer still has content below is a bug).
+          Item {
+            width: parent.width
+            height: fontListScroll.height
 
-            delegate: Row {
-              required property string modelData
-              readonly property bool scanned: fontSelect.resolvedOptions.length > 0
-              readonly property bool installed: root.fontInstalled(modelData)
+            Flickable {
+              id: fontListScroll
+              width: parent.width - (fontListBar.visible ? fontListBar.width : 0)
+              height: Math.min(fontListColumn.implicitHeight, root.fontListMaxHeight)
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              contentWidth: width
+              contentHeight: fontListColumn.implicitHeight
+              interactive: false
+
+            Column {
+              id: fontListColumn
               width: parent.width
-              spacing: Style.space(8)
+              spacing: root.fontListSpacing
 
-              Text {
-                textFormat: Text.PlainText
-                text: modelData
-                color: root.fg
-                font.family: root.fFamily
-                font.pixelSize: Style.font.body
-                elide: Text.ElideRight
-                width: parent.width - missingTag.implicitWidth - removeX.implicitWidth - parent.spacing * 2
-                anchors.verticalCenter: parent.verticalCenter
-              }
+              Repeater {
+                model: Model.asArray(root.setting("fonts", ["Serif"]))
 
-              Text {
-                id: missingTag
-                textFormat: Text.PlainText
-                visible: parent.scanned && !parent.installed
-                text: root.langCfg.notInstalled
-                color: Color.urgent
-                font.family: root.fFamily
-                font.pixelSize: Style.font.caption
-                font.italic: true
-                anchors.verticalCenter: parent.verticalCenter
-              }
+                delegate: Row {
+                  required property string modelData
+                  readonly property bool scanned: fontSelect.resolvedOptions.length > 0
+                  readonly property bool installed: root.fontInstalled(modelData)
+                  width: parent.width
+                  height: root.fontRowHeight
+                  spacing: Style.space(8)
 
-              Text {
-                id: removeX
-                textFormat: Text.PlainText
-                text: "✕"
-                color: Qt.darker(root.fg, 1.5)
-                font.family: root.fFamily
-                font.pixelSize: Style.font.body
-                anchors.verticalCenter: parent.verticalCenter
-                MouseArea {
-                  anchors.fill: parent
-                  anchors.margins: -4
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.removeFont(modelData)
+                  Text {
+                    textFormat: Text.PlainText
+                    text: modelData
+                    color: root.fg
+                    font.family: root.fFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                    width: parent.width - missingTag.implicitWidth - removeX.implicitWidth - parent.spacing * 2
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    id: missingTag
+                    textFormat: Text.PlainText
+                    visible: parent.scanned && !parent.installed
+                    text: root.langCfg.notInstalled
+                    color: Color.urgent
+                    font.family: root.fFamily
+                    font.pixelSize: Style.font.caption
+                    font.italic: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    id: removeX
+                    textFormat: Text.PlainText
+                    text: "✕"
+                    color: Qt.darker(root.fg, 1.5)
+                    font.family: root.fFamily
+                    font.pixelSize: Style.font.body
+                    anchors.verticalCenter: parent.verticalCenter
+                    MouseArea {
+                      anchors.fill: parent
+                      anchors.margins: -4
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.removeFont(modelData)
+                    }
+                  }
                 }
               }
+            }
+
+            WheelHandler {
+              id: fontListWheel
+              target: null
+              onWheel: function(event) {
+                var angle = event.angleDelta.y
+                var pixel = event.pixelDelta.y
+                if (angle === 0 && pixel === 0) return
+                var step = pixel !== 0 ? pixel : angle / 3
+                var atTop = fontListScroll.contentY <= 0
+                var atBottom = fontListScroll.contentY >= fontListScroll.contentHeight - fontListScroll.height - 1
+                if (step > 0 && atTop) {
+                  scroll.contentY = Math.max(0, scroll.contentY - step) // outer scrolls up
+                  event.accepted = true
+                  return
+                }
+                if (step < 0 && atBottom) {
+                  scroll.contentY = Math.min(scroll.contentHeight - scroll.height, scroll.contentY - step) // outer scrolls down
+                  event.accepted = true
+                  return
+                }
+                fontListScroll.contentY = Math.max(0,
+                  Math.min(fontListScroll.contentHeight - fontListScroll.height, fontListScroll.contentY + step))
+                event.accepted = true
+              }
+            }
+          }
+
+            PanelScrollBar {
+              id: fontListBar
+              target: fontListScroll
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
             }
           }
 
@@ -529,6 +644,14 @@ Panel {
             }
           }
         }
+      }
+
+      PanelScrollBar {
+        id: outerBar
+        target: scroll
+        anchors.right: scroll.right
+        anchors.top: scroll.top
+        anchors.bottom: scroll.bottom
       }
     }
   }
