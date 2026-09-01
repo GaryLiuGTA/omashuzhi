@@ -176,6 +176,15 @@ Item {
     refreshTimeoutTimer.restart()
   }
 
+  // Wheel scroll for the option list. delta > 0 = wheel up (contentY
+  // decreases), delta < 0 = wheel down. Clamped to [0, scrollRange]; there is
+  // no outer surface to fall through to inside the popup.
+  function resultListWheelStep(delta) {
+    var range = resultList.contentHeight - resultList.height
+    if (range <= 0) return
+    resultList.contentY = Math.max(0, Math.min(range, resultList.contentY - delta))
+  }
+
   Timer {
     id: refreshTimeoutTimer
     interval: root.refreshTimeoutMs
@@ -517,6 +526,18 @@ Item {
             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                        || event.key === Qt.Key_Space) {
               resultList.toggleCurrent(); event.accepted = true
+            }
+          }
+
+          WheelHandler {
+            target: null
+            onWheel: function(event) {
+              var angle = event.angleDelta.y
+              var pixel = event.pixelDelta.y
+              if (angle === 0 && pixel === 0) return
+              var delta = pixel !== 0 ? pixel : angle / 3
+              root.resultListWheelStep(delta)
+              event.accepted = true
             }
           }
 

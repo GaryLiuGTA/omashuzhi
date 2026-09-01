@@ -474,21 +474,8 @@ Panel {
                 var angle = event.angleDelta.y
                 var pixel = event.pixelDelta.y
                 if (angle === 0 && pixel === 0) return
-                var step = pixel !== 0 ? pixel : angle / 3
-                var atTop = fontListScroll.contentY <= 0
-                var atBottom = fontListScroll.contentY >= fontListScroll.contentHeight - fontListScroll.height - 1
-                if (step > 0 && atTop) {
-                  scroll.contentY = Math.max(0, scroll.contentY - step) // outer scrolls up
-                  event.accepted = true
-                  return
-                }
-                if (step < 0 && atBottom) {
-                  scroll.contentY = Math.min(scroll.contentHeight - scroll.height, scroll.contentY - step) // outer scrolls down
-                  event.accepted = true
-                  return
-                }
-                fontListScroll.contentY = Math.max(0,
-                  Math.min(fontListScroll.contentHeight - fontListScroll.height, fontListScroll.contentY + step))
+                var delta = pixel !== 0 ? pixel : angle / 3
+                root.fontListWheelStep(delta)
                 event.accepted = true
               }
             }
@@ -607,6 +594,27 @@ Panel {
         anchors.bottom: scroll.bottom
       }
     }
+  }
+
+
+
+  // Wheel scroll for the selected-fonts list. delta > 0 = wheel up (contentY
+  // decreases), delta < 0 = wheel down. The inner list consumes the wheel
+  // only while it can move in that direction; otherwise the outer panel
+  // scrolls instead.
+  function fontListWheelStep(delta) {
+    var range = fontListScroll.contentHeight - fontListScroll.height
+    var atTop = fontListScroll.contentY <= 0
+    var atBottom = fontListScroll.contentY >= range - 1
+    if (delta > 0 && atTop) {
+      scroll.contentY = Math.max(0, scroll.contentY - delta) // outer scrolls up
+      return
+    }
+    if (delta < 0 && atBottom) {
+      scroll.contentY = Math.min(scroll.contentHeight - scroll.height, scroll.contentY - delta) // outer scrolls down
+      return
+    }
+    fontListScroll.contentY = Math.max(0, Math.min(range, fontListScroll.contentY - delta))
   }
 
   function fontInstalled(font) {
