@@ -99,6 +99,15 @@ function metaLine(result, lastRunAt, lang) {
     + String(result.w || 0) + "x" + String(result.h || 0)
 }
 
+// The interval field treats 0 as "off", which is not obvious from a spin box
+// alone — so the popup states the resulting behaviour in words underneath it.
+function intervalCaption(minutes, lang) {
+  var cfg = langConfig(lang)
+  var n = Number(minutes)
+  if (!isFinite(n) || n <= 0) return cfg.intervalOff
+  return cfg.intervalEvery.replace("{n}", String(Math.round(n)))
+}
+
 // ---- Language config. The vocabulary differs per script, the plugin's
 //      behaviour is identical. Pattern follows garyliu.lunar-calendar.
 var LANG_DATA = {
@@ -132,6 +141,8 @@ var LANG_DATA = {
     sketchTreeCloud: "树影 / 云影",
     fontSizeLabel: "字号（磅）",
     intervalLabel: "刷新间隔（分钟）",
+    intervalOff: "自动刷新已关闭，请使用「立即刷新」",
+    intervalEvery: "每 {n} 分钟自动刷新一次",
     installedLabel: "已安装字体",
     searchPlaceholder: "搜索字体…",
     removalCaption: "仅对手动输入的名称生效——已安装字体每次扫描都会重新提供。",
@@ -174,6 +185,8 @@ var LANG_DATA = {
     sketchTreeCloud: "樹影 / 雲影",
     fontSizeLabel: "字號（磅）",
     intervalLabel: "重新整理間隔（分鐘）",
+    intervalOff: "自動重新整理已關閉，請使用「立即重新整理」",
+    intervalEvery: "每 {n} 分鐘自動重新整理一次",
     installedLabel: "已安裝字體",
     searchPlaceholder: "搜尋字體…",
     removalCaption: "僅對手動輸入的名稱生效——已安裝字體每次掃描都會重新提供。",
@@ -216,6 +229,8 @@ var LANG_DATA = {
     sketchTreeCloud: "Tree / Cloud",
     fontSizeLabel: "Font size",
     intervalLabel: "Refresh every (min)",
+    intervalOff: "Automatic refresh is off — use Refresh now",
+    intervalEvery: "Refreshing automatically every {n} min",
     installedLabel: "Installed families",
     searchPlaceholder: "Search fonts…",
     removalCaption: "Removal matters for hand-typed names — installed families are always re-offered on scan.",

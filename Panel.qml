@@ -423,6 +423,19 @@ Panel {
             }
           }
 
+          // A spin box showing "0" does not say what 0 DOES. Spell the current
+          // behaviour out, and make the off state visually distinct rather than
+          // just another dim caption.
+          Text {
+            width: parent.width
+            text: Model.intervalCaption(root.setting("updateIntervalMin", 30), root.uiLanguage)
+            color: Number(root.setting("updateIntervalMin", 30)) > 0
+              ? Qt.darker(root.fg, 1.5) : Color.accent
+            font.family: root.fFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
           PanelSeparator {
             width: parent.width
             foreground: root.fg
