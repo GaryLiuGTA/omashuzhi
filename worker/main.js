@@ -89,21 +89,95 @@ function resolveTheme(config) {
   return theme === 'dark';
 }
 
-function pruneCache(cacheDir, prefix) {
-  // Never delete whichever file the live background symlink currently resolves to —
-  // deleting it out from under the link leaves a dangling link (black desktop).
-  let livePath = null;
+// Cache entries we will even look at in one pass. A pathologically full
+// directory must not stall the render or balloon memory.
+const MAX_CACHE_ENTRIES = 10000;
+
+// Resolve the live background symlink in-process. Parsing `readlink -f` output
+// from a shell to decide what to delete is both slower and easier to fool.
+function liveBackgroundPath() {
   try {
-    livePath = T.execute(`readlink -f ${GLib.shell_quote(STATE_BACKGROUND)}`);
-  } catch (e) { /* no live link yet — nothing to protect */ }
+    let f = Gio.File.new_for_path(STATE_BACKGROUND);
+    let info = f.query_info('standard::type,standard::symlink-target', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+    // get_symlink_target() is only valid on an actual symlink; calling it on a
+    // regular file raises a GLib critical.
+    if (info.get_file_type() !== Gio.FileType.SYMBOLIC_LINK) return f.get_path();
+    let target = info.get_symlink_target();
+    if (!target) return f.get_path();
+    if (!GLib.path_is_absolute(target)) {
+      target = GLib.build_filenamev([GLib.path_get_dirname(STATE_BACKGROUND), target]);
+    }
+    return Gio.File.new_for_path(target).get_path();
+  } catch (e) {
+    return null; // no link yet, or unreadable — nothing to protect
+  }
+}
+
+// The cache directory is attacker-relevant: we write PNGs into it and unlink
+// from it. Refuse to touch it unless it is a real directory we own, is not a
+// symlink, and is not group/world-writable. Otherwise a swapped symlink turns
+// our writes and deletes into someone else's problem.
+function assertSafeCacheDir(cacheDir) {
+  let info;
+  try {
+    info = Gio.File.new_for_path(cacheDir)
+      .query_info('standard::type,unix::uid,unix::mode', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+  } catch (e) {
+    throw new Error(`cache directory ${cacheDir} is unreadable: ${e.message ?? e}`);
+  }
+  if (info.get_file_type() !== Gio.FileType.DIRECTORY) {
+    throw new Error(`cache path ${cacheDir} is not a directory (symlink or file?)`);
+  }
+  if (info.get_attribute_uint32('unix::uid') !== GLib_getuid()) {
+    throw new Error(`cache directory ${cacheDir} is not owned by this user`);
+  }
+  let mode = info.get_attribute_uint32('unix::mode') & 0o777;
+  if (mode & 0o022) {
+    throw new Error(`cache directory ${cacheDir} is group/world writable (mode ${mode.toString(8)})`);
+  }
+}
+
+// GLib.get_user_*() has no uid accessor in GJS; read it once from /proc.
+let _uid = null;
+function GLib_getuid() {
+  if (_uid === null) {
+    let self = Gio.File.new_for_path('/proc/self')
+      .query_info('unix::uid', Gio.FileQueryInfoFlags.NONE, null);
+    _uid = self.get_attribute_uint32('unix::uid');
+  }
+  return _uid;
+}
+
+function pruneCache(cacheDir, prefix) {
+  assertSafeCacheDir(cacheDir);
+
+  // Never delete whichever file the live background symlink resolves to —
+  // deleting it out from under the link leaves a dangling link (black desktop).
+  let livePath = liveBackgroundPath();
 
   let dir = Gio.File.new_for_path(cacheDir);
-  let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+  // NOFOLLOW_SYMLINKS: we must see a symlink as a symlink, not as whatever it
+  // points at, or a planted link would have us unlink an arbitrary file.
+  let enumerator = dir.enumerate_children(
+    'standard::name,standard::type,unix::uid,unix::mode',
+    Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
   let info;
   let candidates = [];
+  let seen = 0;
+  let capped = false;
   while ((info = enumerator.next_file(null))) {
+    if (++seen > MAX_CACHE_ENTRIES) { capped = true; break; }
     let name = info.get_name();
-    if (name.startsWith(prefix)) candidates.push(name);
+    if (!name.startsWith(prefix)) continue;
+    // Regular files only: never unlink a symlink, directory, socket or device.
+    if (info.get_file_type() !== Gio.FileType.REGULAR) continue;
+    // Ours only.
+    if (info.get_attribute_uint32('unix::uid') !== GLib_getuid()) continue;
+    candidates.push(name);
+  }
+  enumerator.close(null);
+  if (capped) {
+    printerr(`omashuzhi: cache directory has more than ${MAX_CACHE_ENTRIES} entries; pruning only the first ${MAX_CACHE_ENTRIES}`);
   }
 
   // Filenames are wallpaper-<theme>-<epoch>.png; the epoch is fixed-width, so lexical
@@ -163,7 +237,10 @@ function generate(config) {
 
   // 5. Write PNG
   let cacheDir = GLib.build_filenamev([GLib.get_home_dir(), '.cache', 'omashuzhi']);
-  T.ensureDir(cacheDir);
+  T.ensureDir(cacheDir, 0o700); // per-user scratch: not group/world readable
+  // Validate before we write, not just before we prune — if this path is a
+  // symlink or someone else's directory, refuse rather than follow it.
+  assertSafeCacheDir(cacheDir);
   let prefix = `wallpaper-${dark ? 'dark' : 'light'}`;
   let pngPath = GLib.build_filenamev([cacheDir, `${prefix}-${Date.now()}.png`]);
   surface.writeToPNG(pngPath);

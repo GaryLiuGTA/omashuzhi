@@ -104,6 +104,11 @@ function metaLine(result, lastRunAt, lang) {
 var LANG_DATA = {
   "zh-Hans": {
     title: "数枝",
+    consentTitle: "允许更换壁纸？",
+    consentBody: "数枝会生成含古诗的图片并将其设为桌面壁纸。启用后随时可在 Omarchy 菜单的「样式 → 背景」中换回任意壁纸。",
+    consentAccept: "启用壁纸",
+    consentDecline: "暂不",
+    consentPending: "仅生成图片，未设为壁纸",
     statusGenerating: "正在生成…",
     statusNever: "尚未生成",
     statusLastPrefix: "上次刷新",
@@ -141,6 +146,11 @@ var LANG_DATA = {
   },
   "zh-Hant": {
     title: "數枝",
+    consentTitle: "允許更換桌布？",
+    consentBody: "數枝會產生含古詩的圖片並將其設為桌面桌布。啟用後隨時可在 Omarchy 選單的「樣式 → 背景」中換回任意桌布。",
+    consentAccept: "啟用桌布",
+    consentDecline: "暫不",
+    consentPending: "僅產生圖片，未設為桌布",
     statusGenerating: "正在生成中…",
     statusNever: "尚未生成",
     statusLastPrefix: "上次重新整理",
@@ -178,6 +188,11 @@ var LANG_DATA = {
   },
   "en": {
     title: "Omashuzhi",
+    consentTitle: "Change your wallpaper?",
+    consentBody: "Omashuzhi generates an image with a classical Chinese poem and sets it as your desktop background. You can switch back to any wallpaper at any time from the Omarchy menu under Style \u2192 Background.",
+    consentAccept: "Enable wallpaper",
+    consentDecline: "Not now",
+    consentPending: "Rendering images only \u2014 not setting the wallpaper",
     statusGenerating: "Generating…",
     statusNever: "Never generated",
     statusLastPrefix: "Last refresh",

@@ -38,13 +38,52 @@ export function* chunk(list, step = 2, from = 0) {
   while (from < list.length) yield list.slice(from, from = next(from));
 }
 
-export function request(method, url, param = null) {
+// Hard ceiling on any response body we will read into memory. The real
+// payload is a few hundred bytes; anything remotely near this is hostile or
+// broken, and send_and_read() would happily buffer gigabytes of it.
+export const MAX_RESPONSE_BYTES = 256 * 1024;
+
+export function request(method, url, param = null, limit = MAX_RESPONSE_BYTES) {
   let session = new Soup.Session({ timeout: 30 });
   let msg = param ? Soup.Message.new_from_encoded_form(method, url, Soup.form_encode_hash(param))
     : Soup.Message.new(method, url);
-  let ans = session.send_and_read(msg, null);
-  if (msg.statusCode !== Soup.Status.OK) throw new Error(`HTTP ${msg.statusCode}: ${msg.get_reason_phrase()}`);
-  return decode(ans.get_data());
+
+  // send() streams, unlike send_and_read() which buffers the whole body first.
+  let stream = session.send(msg, null);
+  if (msg.statusCode !== Soup.Status.OK) {
+    try { stream.close(null); } catch (e) { /* best effort */ }
+    throw new Error(`HTTP ${msg.statusCode}: ${msg.get_reason_phrase()}`);
+  }
+
+  // Reject early when the server declares an oversized body; a lying or absent
+  // Content-Length is still caught by the read loop below.
+  let declared = msg.get_response_headers()?.get_content_length?.() ?? 0;
+  if (declared > limit) {
+    try { stream.close(null); } catch (e) { /* best effort */ }
+    throw new Error(`response too large: ${declared} bytes > ${limit}`);
+  }
+
+  let chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      // Read one byte past the remaining budget so an over-limit body trips the
+      // check below instead of being silently truncated into valid-looking JSON.
+      let bytes = stream.read_bytes(Math.min(16384, limit - total + 1), null);
+      let n = bytes.get_size();
+      if (n === 0) break;
+      total += n;
+      if (total > limit) throw new Error(`response exceeded ${limit} bytes`);
+      chunks.push(bytes.get_data());
+    }
+  } finally {
+    try { stream.close(null); } catch (e) { /* best effort */ }
+  }
+
+  let buf = new Uint8Array(total);
+  let at = 0;
+  for (let c of chunks) { buf.set(c, at); at += c.length; }
+  return decode(buf);
 }
 
 export function execute(cmd) {
@@ -53,8 +92,8 @@ export function execute(cmd) {
   return stdout ? decode(stdout).trim() : '';
 }
 
-export function ensureDir(path) {
-  GLib.mkdir_with_parents(path, 0o755);
+export function ensureDir(path, mode = 0o755) {
+  GLib.mkdir_with_parents(path, mode);
 }
 
 export function readJSON(path) {

@@ -224,6 +224,72 @@ Panel {
             }
           }
 
+          // ---- First-run consent -------------------------------------------
+          // The plugin replaces the desktop background, so it asks first and
+          // renders images only until the user agrees. Enabling the plugin is
+          // not by itself consent to overwrite a wallpaper the user chose.
+          Column {
+            id: consentBlock
+            width: parent.width
+            spacing: Style.space(8)
+            visible: root.service ? root.service.wallpaperConsent !== true : false
+
+            Text {
+              width: parent.width
+              text: root.langCfg.consentTitle
+              color: root.fg
+              font.family: root.fFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              text: root.langCfg.consentBody
+              color: Qt.darker(root.fg, 1.4)
+              font.family: root.fFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: root.langCfg.consentAccept
+                bordered: true
+                foreground: root.fg
+                accent: Color.accent
+                fontFamily: root.fFamily
+                onClicked: {
+                  root.persistSettings({ wallpaperConsent: true })
+                  // Give the service the new value before the first run, rather
+                  // than racing the shell.json write-and-reload round trip.
+                  if (root.service) Qt.callLater(function() { root.service.refresh() })
+                }
+              }
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                text: root.langCfg.consentDecline
+                bordered: true
+                foreground: Qt.darker(root.fg, 1.3)
+                accent: Color.accent
+                fontFamily: root.fFamily
+                onClicked: root.persistSettings({ wallpaperConsent: false })
+              }
+            }
+
+            PanelSeparator {
+              width: parent.width
+              foreground: root.fg
+              strength: 0.2
+            }
+          }
+
           // ---- Refresh now ------------------------------------------------
           Button {
             id: refreshButton
@@ -231,6 +297,9 @@ Panel {
             text: root.langCfg.refreshNow
             iconText: "󰑐"
             iconSpinning: root.statusBusy
+            // While unconsented a manual refresh renders the PNG only.
+            tooltipText: (root.service && root.service.wallpaperConsent !== true)
+              ? root.langCfg.consentPending : ""
             bordered: true
             foreground: root.fg
             accent: Color.accent

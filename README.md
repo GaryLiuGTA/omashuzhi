@@ -30,6 +30,18 @@ install directory from the manifest **id**, so the plugin lands in:
 
 Use that id path in any dev instructions — never the repo name.
 
+## Your wallpaper, and consent
+
+This plugin replaces the desktop background — that is what it is for — but it
+**asks first**. On a fresh install `wallpaperConsent` is `false`: the popup shows
+a short prompt explaining what will change, and until you accept, refreshes
+render a PNG into the cache and leave `current/background` untouched. Scheduled
+refreshes stay parked too.
+
+You can revert at any time from the Omarchy menu under **Style → Background**,
+or turn off "Set as wallpaper" in the popup to keep generating images without
+applying them.
+
 ## Removing
 
 ```bash
@@ -74,6 +86,7 @@ the popup (or scalars from the CLI — see the note below).
 | `fontSize` | integer, pt | 8–512 | 96 |
 | `showColor` | boolean | Wave sketch only — paints the colour's Chinese name | `false` |
 | `setWallpaper` | boolean | `false` = render the PNG only, leave the background alone | `true` |
+| `wallpaperConsent` | bool | `false` | Must be `true` before the plugin will touch the desktop background. The popup asks on first run. |
 | `updateIntervalMin` | integer | `0` = off, otherwise 1–1440 | `30` |
 | `language` | string | `zh-Hans` \| `zh-Hant` \| `en` \| `""` (auto) — popup UI only | `""` |
 

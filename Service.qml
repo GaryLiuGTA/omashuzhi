@@ -26,6 +26,7 @@ Item {
   readonly property string pluginId: "garyliu.omashuzhi-wallpaper"
   readonly property string lockPath: Quickshell.env("XDG_RUNTIME_DIR") + "/omashuzhi.lock"
   readonly property string workerMain: String(Qt.resolvedUrl("worker/main.js")).replace(/^file:\/\//, "")
+  readonly property string runBounded: String(Qt.resolvedUrl("worker/run-bounded.sh")).replace(/^file:\/\//, "")
 
   // The live shell.json layout entry for this plugin, or null until one
   // exists. A bare `{ id }` entry (what `plugin enable` writes) satisfies the
@@ -55,6 +56,11 @@ Item {
   readonly property int fontSize: Math.max(8, Math.min(512, Math.round(Number(setting("fontSize", 96)) || 96)))
   readonly property bool showColor: setting("showColor", false) === true
   readonly property bool setWallpaper: setting("setWallpaper", true) !== false
+  // Explicit, opt-in consent before we ever touch the desktop background.
+  // Defaults FALSE: enabling the plugin must not silently replace the user's
+  // wallpaper. Until the popup's consent prompt is accepted, the worker runs
+  // with --no-set (render only) and the scheduler stays parked.
+  readonly property bool wallpaperConsent: setting("wallpaperConsent", false) === true
   readonly property int updateIntervalMin: Math.max(0, Math.min(1440, Math.round(Number(setting("updateIntervalMin", 30)) || 0)))
   readonly property string language: String(setting("language", ""))
 
@@ -76,11 +82,58 @@ Item {
   property double lastRunAt: 0
   property string _stderrBuffer: ""
 
+  // Deadlines. The worker does an HTTP fetch plus a full-resolution Cairo
+  // render, so it is legitimately slow; 120s is generous but finite. The QML
+  // watchdogs are a backstop for the case where `timeout` itself never
+  // reports back (process gone, pipe wedged) — they SIGKILL and clear state so
+  // a stuck run can never wedge every future refresh.
+  readonly property int workerTimeoutSec: 120
+  readonly property int workerWatchdogMs: (workerTimeoutSec + 15) * 1000
+  readonly property int probeWatchdogMs: 20000
+  // StdioCollector has no length limit, so cap what we retain and parse.
+  readonly property int maxWorkerOutputBytes: 64 * 1024
+  readonly property int maxStatusChars: 200
+
+  function clampText(raw, max) {
+    var t = String(raw || "")
+    return t.length > max ? t.slice(0, max) + "… (truncated)" : t
+  }
+
+  Timer {
+    id: workerWatchdog
+    interval: root.workerWatchdogMs
+    repeat: false
+    onTriggered: {
+      if (!workerProc.running) return
+      console.warn("omashuzhi: worker exceeded " + root.workerWatchdogMs + "ms; killing")
+      try { workerProc.signal(9) } catch (e) { }
+      workerProc.running = false   // `busy` is bound to this, so it clears too
+      root.lastError = "timed out"
+    }
+  }
+
+  Timer {
+    id: probeWatchdog
+    interval: root.probeWatchdogMs
+    repeat: false
+    onTriggered: {
+      if (!probeProc.running) return
+      try { probeProc.signal(9) } catch (e) { }
+      probeProc.running = false
+    }
+  }
+
   // flock -n -E 75: a concurrent run (scheduler + manual refresh landing on
   // top of each other) makes the second one exit 75 rather than render twice.
   // Exit 75 is benign — "already running" — not an error.
   function workerArgv() {
-    var args = ["flock", "-n", "-E", "75", root.lockPath, "gjs", "-m", root.workerMain]
+    // run-bounded.sh enforces the deadline AND reaps the whole process group.
+    // Plain `timeout` is not sufficient: measured on this machine, it signals
+    // only the command it launched, leaving grandchildren (hyprctl, fc-list, a
+    // wedged helper) running past the deadline. Exit 124 means "timed out".
+    var args = ["flock", "-n", "-E", "75", root.lockPath,
+                "bash", root.runBounded, String(root.workerTimeoutSec), "5",
+                "gjs", "-m", root.workerMain]
     args.push("--theme", String(root.theme))
     args.push("--orientation", String(root.orientation))
     args.push("--sketch", String(root.sketch))
@@ -89,7 +142,9 @@ Item {
     args.push("--font", String(font))
     args.push("--font-size", String(root.fontSize))
     args.push(root.showColor ? "--show-color" : "--no-show-color")
-    args.push(root.setWallpaper ? "--set-wallpaper" : "--no-set")
+    // Consent gates the wallpaper write; setWallpaper is the ongoing toggle.
+    // Either one off means render-only.
+    args.push((root.wallpaperConsent && root.setWallpaper) ? "--set-wallpaper" : "--no-set")
     return args
   }
 
@@ -98,6 +153,7 @@ Item {
     root._stderrBuffer = ""
     workerProc.command = root.workerArgv()
     workerProc.running = true
+    workerWatchdog.restart()
   }
 
   // The worker emits a machine-readable final line after its human output.
@@ -126,23 +182,36 @@ Item {
     command: []
     running: false
 
+    // StdioCollector has no size limit of its own, so cap what we retain and
+    // parse. A noisy or hostile descendant must not be able to grow the shell's
+    // heap through us.
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.parseWorkerOutput(String(text || ""))
+      onStreamFinished: root.parseWorkerOutput(root.clampText(text, root.maxWorkerOutputBytes))
     }
 
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root._stderrBuffer += String(text || "")
+      onStreamFinished: root._stderrBuffer = root.clampText(root._stderrBuffer + String(text || ""),
+                                                            root.maxWorkerOutputBytes)
     }
 
     onExited: function(exitCode) {
+      workerWatchdog.stop()
       if (exitCode === 75) {
         root.lastError = "already running"
         return
       }
+      // timeout(1): 124 = deadline reached, 137 = had to SIGKILL the group.
+      // Distinct, recoverable status — not a crash — and state is cleared
+      // above so the next refresh runs normally.
+      if (exitCode === 124 || exitCode === 137) {
+        root.lastError = "timed out after " + root.workerTimeoutSec + "s"
+        return
+      }
       if (exitCode !== 0) {
-        root.lastError = root.elideStderr(root._stderrBuffer) || "worker exited " + exitCode
+        root.lastError = root.clampText(root.elideStderr(root._stderrBuffer) || "worker exited " + exitCode,
+                                        root.maxStatusChars)
       }
     }
   }
@@ -171,10 +240,12 @@ Item {
   // where the freshest PNG still carries its epoch.
   function discoverLastRunEpoch() {
     probeProc.command = [
+      "bash", root.runBounded, "10", "2",
       "bash", "-c",
       "ls -1t \"" + root.cacheDir + "\"/wallpaper-*.png 2>/dev/null | head -1"
     ]
     probeProc.running = true
+    probeWatchdog.restart()
   }
 
   function applyDiscovery(raw) {
@@ -192,12 +263,16 @@ Item {
     running: false
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.applyDiscovery(String(text || ""))
+      onStreamFinished: root.applyDiscovery(root.clampText(text, 4096))
     }
+    onExited: probeWatchdog.stop()
   }
 
   function checkScheduled() {
     if (!root.entry) return // not known yet, not "all defaults"
+    // No scheduled work at all until the user has consented. Enabling the
+    // plugin must not start rewriting the background on a timer.
+    if (!root.wallpaperConsent) return
     var interval = root.updateIntervalMin
     if (interval <= 0) return // off
     if (Date.now() - root.serviceStart < root.startupGraceMs) return
@@ -231,6 +306,7 @@ Item {
       fontSize: root.fontSize,
       showColor: root.showColor,
       setWallpaper: root.setWallpaper,
+      wallpaperConsent: root.wallpaperConsent,
       updateIntervalMin: root.updateIntervalMin,
       language: root.language,
       lastResult: root.lastResult,

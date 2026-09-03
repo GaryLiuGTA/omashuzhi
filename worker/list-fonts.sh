@@ -11,5 +11,13 @@ all="$(fc-list --format='%{family}\n' 2>/dev/null | tr ',' '\n' | sed 's/\\//g' 
 cjk_json="$(printf '%s\n' "$cjk" | jq -R . | jq -s .)"
 
 # CJK first, then everything else, deduped in that order.
-printf '%s\n' "$cjk" "$all" | awk 'NF && !seen[$0]++' | jq -Rn --argjson cjk "$cjk_json" \
-  '[inputs] | map({ value: ., label: ., description: (if (. as $f | $cjk | index($f)) then "CJK" else "" end) })'
+# Bounded at the source: at most MAX_FAMILIES rows, and the emitted JSON is
+# hard-capped so a pathological fontconfig cannot hand the shell an unbounded
+# buffer (StdioCollector has no size limit of its own).
+MAX_FAMILIES=2000
+MAX_BYTES=262144
+
+printf '%s\n' "$cjk" "$all" | awk 'NF && !seen[$0]++' | head -n "$MAX_FAMILIES" \
+  | jq -Rn --argjson cjk "$cjk_json" \
+    '[inputs] | map({ value: ., label: ., description: (if (. as $f | $cjk | index($f)) then "CJK" else "" end) })' \
+  | head -c "$MAX_BYTES"
