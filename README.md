@@ -129,6 +129,14 @@ omarchy-shell garyliu.omashuzhi-wallpaper refresh
 
 ## Migration from hypr-shuzhi
 
+> **These are commands you run once, by hand, to uninstall the predecessor.**
+> This plugin ships no systemd units and never invokes `systemctl` — it has no
+> service-management code at all (`grep -rn systemctl` over the plugin sources
+> returns nothing outside this section). The units below were installed by
+> [hypr-shuzhi](https://github.com/GaryLiuGTA/hypr-shuzhi), the standalone tool
+> this plugin replaces; scheduling now runs on a timer inside `omarchy-shell`.
+> Skip this whole section if you never used hypr-shuzhi.
+
 1. Stop and remove the old scheduler:
    ```bash
    systemctl --user disable --now hypr-shuzhi.timer
