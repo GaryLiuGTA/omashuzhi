@@ -99,12 +99,25 @@ Item {
 
   // Deadlines. The worker does an HTTP fetch plus a full-resolution Cairo
   // render, so it is legitimately slow; 120s is generous but finite. The QML
-  // watchdogs are a backstop for the case where `timeout` itself never
-  // reports back (process gone, pipe wedged) — they SIGKILL and clear state so
-  // a stuck run can never wedge every future refresh.
+  // watchdogs are a backstop for the case where the wrapper itself never
+  // reports back (process gone, pipe wedged): they SIGTERM so the wrapper can
+  // reap its own tree, escalate to SIGKILL only if that fails, and clear state
+  // so a stuck run cannot wedge every future refresh.
   readonly property int workerTimeoutSec: 120
   readonly property int workerWatchdogMs: (workerTimeoutSec + 15) * 1000
+
+  // Passed to run-bounded.sh as its <kill-after>, and it is also how long the
+  // wrapper's own TERM -> KILL teardown can take. The QML escalation below MUST
+  // outlast it: a SIGKILL that lands while the wrapper is still escalating
+  // kills the only process that can reap the tree, which is the orphaned-
+  // descendants bug all over again. Measured teardown against a TERM-ignoring
+  // grandchild is ~5.3s for a 5s grace, so 5s of extra headroom.
+  readonly property int workerKillGraceSec: 5
+  readonly property int killEscalationMs: (workerKillGraceSec + 5) * 1000
+
+  readonly property int probeKillGraceSec: 2
   readonly property int probeWatchdogMs: 20000
+  readonly property int probeEscalationMs: (probeKillGraceSec + 5) * 1000
   // StdioCollector has no length limit, so cap what we retain and parse.
   readonly property int maxWorkerOutputBytes: 64 * 1024
   readonly property int maxStatusChars: 200
@@ -137,7 +150,7 @@ Item {
   // it is the fallback and not the first move.
   Timer {
     id: killEscalation
-    interval: 5000
+    interval: root.killEscalationMs
     repeat: false
     onTriggered: {
       if (!workerProc.running) return
@@ -147,9 +160,23 @@ Item {
     }
   }
 
+  // Same two-stage shape as the worker: the probe also runs through
+  // run-bounded.sh, so an immediate SIGKILL would orphan its tree and leak the
+  // deadline marker instead of letting the wrapper's trap clean up.
   Timer {
     id: probeWatchdog
     interval: root.probeWatchdogMs
+    repeat: false
+    onTriggered: {
+      if (!probeProc.running) return
+      try { probeProc.signal(15) } catch (e) { }
+      probeKillEscalation.restart()
+    }
+  }
+
+  Timer {
+    id: probeKillEscalation
+    interval: root.probeEscalationMs
     repeat: false
     onTriggered: {
       if (!probeProc.running) return
@@ -172,7 +199,8 @@ Item {
     // and everything below it would survive. With the wrapper outermost, its
     // trap reaps the whole tree (flock and the renderer included) on SIGTERM.
     // The reverse order left a killed run holding the lock forever.
-    var args = ["bash", root.runBounded, String(root.workerTimeoutSec), "5",
+    var args = ["bash", root.runBounded, String(root.workerTimeoutSec),
+                String(root.workerKillGraceSec),
                 "flock", "-n", "-E", "75", root.lockPath,
                 "gjs", "-m", root.workerMain]
     args.push("--theme", String(root.theme))
@@ -296,7 +324,7 @@ Item {
     // containing $(...) executed, and any HOME with a quote or space broke the
     // command outright.
     probeProc.command = [
-      "bash", root.runBounded, "10", "2",
+      "bash", root.runBounded, "10", String(root.probeKillGraceSec),
       "bash", "-c", "ls -1t \"$1\"/wallpaper-*.png 2>/dev/null | head -1",
       "omashuzhi-probe", root.cacheDir
     ]
@@ -332,7 +360,7 @@ Item {
       waitForEnd: true
       onStreamFinished: root.applyDiscovery(root.clampText(text, 4096))
     }
-    onExited: probeWatchdog.stop()
+    onExited: { probeWatchdog.stop(); probeKillEscalation.stop() }
   }
 
   function checkScheduled() {
