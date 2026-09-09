@@ -73,24 +73,85 @@ exec 8< "$fired" || die "cannot open the deadline marker for reading"
 
 child=0
 watcher=0
+reaped=0
 
-# Reap everything we started. Killing the negative pid targets the process
-# GROUP, which is why both the child and the watcher are started under `set -m`
-# (job control), making each its own group leader.
+# Signal one of our process GROUPS. Killing the negative pid targets the group,
+# which is why both the child and the watcher are started under `set -m` (job
+# control), making each its own group leader. Fall back to the bare pid if the
+# group is already gone.
+signal_group() {
+  kill -"$2" -"$1" 2>/dev/null || kill -"$2" "$1" 2>/dev/null || true
+}
+
+# Bounded TERM -> grace -> KILL -> reap over one group.
+#
+# An earlier version sent a single TERM and returned immediately, so a
+# descendant that IGNORES TERM (a wedged renderer, a helper with its own
+# handler) outlived the wrapper and kept holding flock's lock descriptor —
+# which is the whole failure this script exists to prevent. The escalation
+# existed only inside the deadline watcher; now every path uses it.
+#
+# `kill -0` on a negative pid is the liveness probe. It is checked BEFORE
+# signalling, for two reasons: a group with no live members must not be
+# signalled at all (once the leader has been reaped its pgid could in principle
+# have been recycled), and the common case where nothing ignored TERM returns on
+# the first poll instead of burning the whole grace. On the external-signal
+# path neither job has been waited on, so bash still holds each as an unreaped
+# job and neither the pid nor the pgid can have been recycled.
+teardown_group() {
+  local pg=$1 i=0 limit=$(( grace * 10 ))
+
+  [ "$pg" -gt 0 ] || return 0
+  if ! kill -0 -"$pg" 2>/dev/null; then
+    wait "$pg" 2>/dev/null || true
+    return 0
+  fi
+
+  signal_group "$pg" TERM
+  while kill -0 -"$pg" 2>/dev/null; do
+    [ "$i" -ge "$limit" ] && break
+    sleep 0.1
+    i=$(( i + 1 ))
+  done
+
+  if kill -0 -"$pg" 2>/dev/null; then
+    signal_group "$pg" KILL
+    i=0
+    while kill -0 -"$pg" 2>/dev/null && [ "$i" -lt 20 ]; do
+      sleep 0.1
+      i=$(( i + 1 ))
+    done
+  fi
+
+  # Reap the job so the paths that never `wait` do not leave a zombie behind.
+  wait "$pg" 2>/dev/null || true
+}
+
+# EXIT is the single cleanup funnel: TERM/INT/HUP just `exit`, which runs this,
+# so normal completion, the deadline path and external cancellation all get the
+# identical bounded teardown. Idempotent, because the normal path drains the
+# groups itself and then exits through here.
 reap() {
-  if [ "$child" -gt 0 ]; then
-    kill -TERM -"$child" 2>/dev/null || kill -TERM "$child" 2>/dev/null || true
-  fi
-  if [ "$watcher" -gt 0 ]; then
-    # The watcher's foreground `sleep` is a separate process and inherits every
-    # fd this script holds — including flock's lock descriptor. Killing only the
-    # subshell left that sleep alive for the whole deadline, holding the lock
-    # and making every subsequent run exit 75. Kill the group.
-    kill -TERM -"$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
-  fi
+  [ "$reaped" = 1 ] && return 0
+  reaped=1
+  # Watcher first: it must not fire its own TERM/KILL at the child while we are
+  # dismantling the child ourselves.
+  teardown_group "$watcher"
+  teardown_group "$child"
+  # Unlink only once both groups are gone, so nothing can still be writing.
   rm -f "$fired" 2>/dev/null || true
 }
 trap 'reap' EXIT
+# TERM/INT/HUP only `exit`; EXIT does the work, so there is exactly one
+# teardown implementation and no path that can skip it.
+#
+# Caveat, verified: a signal inherited as SIG_IGN cannot be trapped or reset by
+# the shell (POSIX). bash sets SIGINT and SIGQUIT to SIG_IGN for asynchronous
+# commands, so a wrapper launched as `run-bounded.sh ... &` from another shell
+# shows `SigIgn: 0000000000000006` and this INT trap is inert — the run then
+# ends at its deadline instead. That is not the path that matters here:
+# Quickshell starts the wrapper directly, not through a shell, and sends only
+# SIGTERM (Process::terminate) and SIGKILL (Process::signal).
 trap 'exit 143' TERM INT HUP
 
 # --- Run -------------------------------------------------------------------
@@ -124,8 +185,15 @@ set +m
 wait "$child"
 rc=$?
 
-kill -TERM -"$watcher" 2>/dev/null || kill -TERM "$watcher" 2>/dev/null || true
-wait "$watcher" 2>/dev/null || true
+# Stop the watcher before reading its verdict, so the decision below cannot
+# race a watcher that fires in the gap after the command was reaped.
+teardown_group "$watcher"
+watcher=0
+
+# The command is gone, but a grandchild it spawned can still be in its group
+# holding the lock. Drain that now, while the pgid is provably still ours.
+teardown_group "$child"
+child=0
 
 # Non-empty marker => the watcher fired. Read through the retained descriptor.
 timed_out=0
