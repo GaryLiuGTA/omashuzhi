@@ -61,6 +61,15 @@ IFS='|' read -r md_type md_uid md_mode <<< "$marker_meta"
 [ "$md_uid" = "$(id -u)" ] || die "$marker_dir is owned by uid $md_uid, not $(id -u)"
 [ "$md_mode" = 700 ] || die "$marker_dir mode is $md_mode, expected 700"
 
+# Sweep markers orphaned by an untrappable SIGKILL of a previous wrapper. The
+# EXIT trap cannot run in that case, so without this they accumulate in
+# $XDG_RUNTIME_DIR for the life of the session. Safe and bounded: the directory
+# has already been validated as a real directory, ours, mode 0700; only regular
+# files (never symlinks — find does not follow, and -type f is false for a
+# link) matching our own fixed-width name are considered; and an hour is far
+# longer than any run can live, which is bounded by deadline + kill-after.
+find "$marker_dir" -maxdepth 1 -type f -name 'deadline.??????' -mmin +60 -delete 2> /dev/null || true
+
 fired=$(mktemp "$marker_dir/deadline.XXXXXX") || die "cannot create the deadline marker"
 chmod 600 "$fired" || die "cannot chmod the deadline marker"
 # 9 = write side (watcher signals through it), 8 = retained read side. Reading
