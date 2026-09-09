@@ -118,45 +118,15 @@ compares the current time against the last run (parsed from the newest PNG's
 timestamped filename in `~/.cache/omashuzhi/`), firing when
 `now − lastRun ≥ updateIntervalMin` minutes. `updateIntervalMin: 0` disables it.
 Because the tick re-derives the delta every pass, it survives suspend/resume
-without drift. There is no `.timer` unit — if you migrated from hypr-shuzhi,
-disable and remove the old ones.
+without drift. There is no `.timer` unit; if you are coming from
+[hypr-shuzhi](https://github.com/GaryLiuGTA/hypr-shuzhi), its uninstall steps
+live in that project's own README.
 
 Manual refresh for a keybind:
 
 ```bash
 omarchy-shell garyliu.omashuzhi-wallpaper refresh
 ```
-
-## Migration from hypr-shuzhi
-
-> **These are commands you run once, by hand, to uninstall the predecessor.**
-> This plugin ships no systemd units and never starts, stops, or queries any
-> service — it contains no service-management code at all; a search of the QML,
-> JavaScript and shell sources for service-control commands finds only the block
-> immediately below. The units below were installed by
-> [hypr-shuzhi](https://github.com/GaryLiuGTA/hypr-shuzhi), the standalone tool
-> this plugin replaces; scheduling now runs on a timer inside `omarchy-shell`.
-> Skip this whole section if you never used hypr-shuzhi.
-
-1. Stop and remove the old scheduler:
-   ```bash
-   systemctl --user disable --now hypr-shuzhi.timer
-   systemctl --user disable --now hypr-shuzhi.service
-   systemctl --user daemon-reload
-   ```
-2. Remove the old state, then the cache — **in that order**. The live
-   `current/background` symlink still points into the cache, so deleting the
-   cache first dangles the link and blacks the desktop:
-   ```bash
-   rm -rf ~/.local/share/hypr-shuzhi
-   rm -rf ~/.cache/hypr-shuzhi   # delete this LAST
-   ```
-3. Install the plugin and pick your fonts. The shipped default is
-   `["Serif"]`; this machine's ten families, ready to paste into the popup's
-   font picker:
-   ```json
-   ["文道小纂体", "汉仪篆书繁", "汉仪中隶书繁", "Aa宋徽宗瘦金加粗版 (非商业使用)", "站酷庆科黄油体", "余繁新语", "演示佛系体", "钟齐志莽行书", "霞鹜文楷等宽", "得意黑"]
-   ```
 
 ## Standalone worker usage
 
