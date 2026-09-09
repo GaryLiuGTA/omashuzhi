@@ -439,7 +439,19 @@ const Markup = {
     // original markup to preserve attributes (size, bgcolor, fgcolor) and use a
     // single PangoLayout. This ensures correct glyph winding for the seal cutout.
     if (!plainText.includes('\n')) {
-      let newMarkup = text.replace(plainText, [...plainText].join('\n'));
+      // Rebuild the markup structurally rather than string-replacing the plain
+      // text into it. `text.replace(plainText, ...)` matched the FIRST
+      // occurrence, which for short strings can be INSIDE the tag: an author
+      // of "span", "size", "45" or "5%" produced things like
+      // <span size="4\n5%">45</span> and Pango rejected the attribute. It also
+      // silently undid the escaping motto.js had applied, since plainText is
+      // the decoded text. Splice only the element's content, re-escaped.
+      let split = T.esc([...plainText].join('\n'));
+      let open = text.indexOf('>');
+      let close = text.lastIndexOf('<');
+      let newMarkup = (open !== -1 && close > open)
+        ? `${text.slice(0, open + 1)}${split}${text.slice(close)}`
+        : split;
       let pl = PangoCairo.create_layout(cr);
       pl.set_font_description(font);
       pl.set_markup(newMarkup, -1);

@@ -66,10 +66,19 @@ function getSketchModule(idx, dark) {
 }
 
 function setWallpaper(pngPath) {
-  // Remove existing symlink/file and create new symlink
-  let linkFile = Gio.File.new_for_path(STATE_BACKGROUND);
-  try { linkFile.delete(null); } catch (e) { /* ok */ }
-  linkFile.make_symbolic_link(pngPath, null);
+  // Replace the link atomically, the way omarchy-theme-bg-set does with
+  // `ln -nsf`. The previous delete-then-create left a window with no link at
+  // all — which the shell's background plugin can observe — and if the path
+  // was ever a regular file the delete destroyed it silently. rename(2) over
+  // the target has neither problem.
+  let tmpPath = `${STATE_BACKGROUND}.omashuzhi-${Date.now()}`;
+  let tmpFile = Gio.File.new_for_path(tmpPath);
+  try { tmpFile.delete(null); } catch (e) { /* not there: fine */ }
+  tmpFile.make_symbolic_link(pngPath, null);
+  if (GLib.rename(tmpPath, STATE_BACKGROUND) !== 0) {
+    try { tmpFile.delete(null); } catch (e) { /* best effort */ }
+    die(`could not point ${STATE_BACKGROUND} at ${pngPath}`);
+  }
 
   // Omarchy >= 4.0 renders the background via the omarchy-shell (Quickshell), not swaybg.
   // Invoked via absolute path since keybind-triggered execs run under Hyprland's own $PATH,
@@ -148,8 +157,77 @@ function GLib_getuid() {
   return _uid;
 }
 
-function pruneCache(cacheDir, prefix) {
-  assertSafeCacheDir(cacheDir);
+// Validate the cache path and hand back a directory it is safe to write to.
+// Two things the leaf-only check missed:
+//  - T.ensureDir() creates the leaf THROUGH whatever the prefix resolves to,
+//    so a symlinked ~/.cache meant we happily created and wrote inside an
+//    attacker-chosen directory while the leaf itself passed every check.
+//  - mkdir_with_parents is a no-op on an existing directory, so a leaf left
+//    at 0755 by an older version was never corrected.
+// Failures die() with a readable message instead of throwing a JS stack at
+// the user through the popup's status line.
+function prepareCacheDir() {
+  let home = GLib.get_home_dir();
+  let parent = GLib.build_filenamev([home, '.cache']);
+  let cacheDir = GLib.build_filenamev([parent, 'omashuzhi']);
+
+  try {
+    // Every component we did not create ourselves must be a real directory we
+    // own — checked with NOFOLLOW so a symlink is seen as a symlink.
+    for (let dir of [home, parent]) {
+      let info = Gio.File.new_for_path(dir)
+        .query_info('standard::type,unix::uid', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      if (info.get_file_type() !== Gio.FileType.DIRECTORY) {
+        die(`${dir} is not a directory (symlink?); refusing to create a cache under it`);
+      }
+      if (info.get_attribute_uint32('unix::uid') !== GLib_getuid()) {
+        die(`${dir} is not owned by this user; refusing to create a cache under it`);
+      }
+    }
+  } catch (e) {
+    if (e && e.message && e.message.startsWith('omashuzhi:')) throw e;
+    die(`cannot validate the cache path: ${e.message ?? e}`);
+  }
+
+  T.ensureDir(cacheDir, 0o700);
+  try {
+    let info = Gio.File.new_for_path(cacheDir)
+      .query_info('standard::type,unix::uid,unix::mode', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+    let mode = info.get_attribute_uint32('unix::mode') & 0o777;
+    if (info.get_file_type() === Gio.FileType.DIRECTORY
+        && info.get_attribute_uint32('unix::uid') === GLib_getuid()
+        && mode !== 0o700) {
+      // Tighten a merely-loose mode inherited from an older version (0755 was
+      // shipped for a while); mkdir_with_parents would not correct it.
+      // But do NOT quietly adopt a group/world-WRITABLE directory by
+      // chmod'ing it: anything could already have been planted inside, and a
+      // planted symlink at a name we later write would be followed. Refuse and
+      // let the user look at it.
+      if (mode & 0o022) {
+        die(`cache directory ${cacheDir} is group/world writable (mode ${mode.toString(8)}); `
+          + `refusing to use it — inspect it and 'chmod 700' it yourself`);
+      }
+      GLib.chmod(cacheDir, 0o700);
+    }
+  } catch (e) {
+    if (e && e.message && String(e.message).includes('group/world writable')) throw e;
+    /* otherwise assertSafeCacheDir below is the gate */
+  }
+
+  try {
+    assertSafeCacheDir(cacheDir);
+  } catch (e) {
+    die(`${e.message ?? e}`);
+  }
+  return cacheDir;
+}
+
+function pruneCache(cacheDir, prefix, keepName) {
+  try {
+    assertSafeCacheDir(cacheDir);
+  } catch (e) {
+    die(`${e.message ?? e}`);
+  }
 
   // Never delete whichever file the live background symlink resolves to —
   // deleting it out from under the link leaves a dangling link (black desktop).
@@ -180,12 +258,18 @@ function pruneCache(cacheDir, prefix) {
     printerr(`omashuzhi: cache directory has more than ${MAX_CACHE_ENTRIES} entries; pruning only the first ${MAX_CACHE_ENTRIES}`);
   }
 
-  // Filenames are wallpaper-<theme>-<epoch>.png; the epoch is fixed-width, so lexical
-  // ordering is chronological. Keep the newest, plus the live file, drop the rest.
+  // Filenames are wallpaper-<theme>-<epoch>.png, so lexical order is normally
+  // chronological — but "normally" is not a guarantee we can delete on. A
+  // single file with a larger epoch in its name (a clock step, a stray touch)
+  // made every later run compute `newest` as that file and delete the PNG it
+  // had just written, leaving current/background dangling and a black desktop.
+  // So `keepName` — the file this run wrote — is protected explicitly, and it
+  // needs to be: it is not yet the live file, so livePath cannot cover it.
   candidates.sort();
   let newest = candidates.length ? candidates[candidates.length - 1] : null;
   for (let name of candidates) {
     let path = GLib.build_filenamev([cacheDir, name]);
+    if (keepName && name === keepName) continue;
     if (name === newest) continue;
     if (livePath && path === livePath) continue;
     GLib.unlink(path);
@@ -193,6 +277,11 @@ function pruneCache(cacheDir, prefix) {
 }
 
 function generate(config) {
+  // Validate the cache path FIRST. An unusable cache used to surface as an
+  // uncaught JS stack trace only after a full-resolution render had already
+  // been paid for.
+  let cacheDir = prepareCacheDir();
+
   let dark = resolveTheme(config);
   let orientation = config.orientation ?? (config.level != null ? (config.level ? 'horizontal' : 'vertical') : 'horizontal');
   let level = orientation !== 'vertical';
@@ -236,10 +325,8 @@ function generate(config) {
   Draw.paint(Draw.Motto, cr, mottoLayout, host);
 
   // 5. Write PNG
-  let cacheDir = GLib.build_filenamev([GLib.get_home_dir(), '.cache', 'omashuzhi']);
-  T.ensureDir(cacheDir, 0o700); // per-user scratch: not group/world readable
-  // Validate before we write, not just before we prune — if this path is a
-  // symlink or someone else's directory, refuse rather than follow it.
+  // Re-checked here (cheap) as well as up front, so the window between
+  // validating and writing stays as small as it can be.
   assertSafeCacheDir(cacheDir);
   let prefix = `wallpaper-${dark ? 'dark' : 'light'}`;
   let pngPath = GLib.build_filenamev([cacheDir, `${prefix}-${Date.now()}.png`]);
@@ -250,7 +337,7 @@ function generate(config) {
   // requests by exact path, so reusing a path would make the switch silently no-op. Prune
   // unconditionally (not gated on setWallpaper): keep the newest file per theme prefix plus
   // whatever the live background resolves to, so the cache never grows one PNG per run.
-  pruneCache(cacheDir, prefix);
+  pruneCache(cacheDir, prefix, GLib.path_get_basename(pngPath));
 
   print(`Generated: ${pngPath} (${W}x${H})`);
   return {
@@ -261,6 +348,46 @@ function generate(config) {
     sketch: SKETCH_NAMES[sketchIdx],
     font: fontName,
   };
+}
+
+const MAX_CONFIG_BYTES = 64 * 1024;
+
+// Shared gate so a value cannot reach the renderer without passing the same
+// checks as its CLI flag.
+function validateConfig(config, origin) {
+  const enums = {
+    theme: ['dark', 'light', 'random'],
+    orientation: ['horizontal', 'vertical'],
+    sketch: ['wave', 'blob', 'oval', 'tree', 'cloud', 'random'],
+  };
+  for (let key of Object.keys(enums)) {
+    if (config[key] === undefined) continue;
+    if (typeof config[key] !== 'string' || !enums[key].includes(config[key])) {
+      die(`${origin}: ${key} must be one of ${enums[key].join(', ')} (got: ${JSON.stringify(config[key])})`);
+    }
+  }
+  if (config.fontSize !== undefined) {
+    let n = Number(config.fontSize);
+    if (!Number.isInteger(n) || n < 8 || n > 512) {
+      die(`${origin}: fontSize must be an integer in 8..512 (got: ${JSON.stringify(config.fontSize)})`);
+    }
+    config.fontSize = n;
+  }
+  if (config.font !== undefined) {
+    let fonts = Array.isArray(config.font) ? config.font : [config.font];
+    if (fonts.length === 0 || !fonts.every(f => typeof f === 'string' && f.length > 0 && f.length <= 200)) {
+      die(`${origin}: font must be a non-empty string, or an array of them, each at most 200 chars`);
+    }
+  }
+  for (let key of ['showColor', 'setWallpaper', 'level']) {
+    if (config[key] !== undefined && typeof config[key] !== 'boolean') {
+      die(`${origin}: ${key} must be true or false (got: ${JSON.stringify(config[key])})`);
+    }
+  }
+  if (config.colorFont !== undefined
+      && (typeof config.colorFont !== 'string' || config.colorFont.length > 200)) {
+    die(`${origin}: colorFont must be a string of at most 200 chars`);
+  }
 }
 
 function parseArgs() {
@@ -281,11 +408,35 @@ function parseArgs() {
     if (ARGV[i] === '--config') {
       let path = ARGV[i + 1];
       if (path === undefined || path.startsWith('--')) die('--config requires a file path');
+      // Must be a regular file of sane size: --config /dev/zero hung forever,
+      // because file_get_contents is unbounded and a character device never
+      // ends.
+      let info;
       try {
-        Object.assign(config, T.readJSON(path));
+        info = Gio.File.new_for_path(path)
+          .query_info('standard::type,standard::size', Gio.FileQueryInfoFlags.NONE, null);
+      } catch (e) {
+        die(`cannot read config file ${path}: ${e.message ?? e}`);
+      }
+      if (info.get_file_type() !== Gio.FileType.REGULAR) die(`config file ${path} is not a regular file`);
+      if (info.get_size() > MAX_CONFIG_BYTES) {
+        die(`config file ${path} is ${info.get_size()} bytes; limit is ${MAX_CONFIG_BYTES}`);
+      }
+      let loaded;
+      try {
+        loaded = T.readJSON(path);
       } catch (e) {
         die(`failed to load config file ${path}: ${e.message ?? e}`);
       }
+      if (!loaded || typeof loaded !== 'object' || Array.isArray(loaded)) {
+        die(`config file ${path} must contain a JSON object`);
+      }
+      Object.assign(config, loaded);
+      // File values used to go straight through, skipping every check the
+      // equivalent --flag performs: an unknown theme silently rendered light,
+      // fontSize 100000 produced a libfreetype error, a numeric font threw an
+      // uncaught exception.
+      validateConfig(config, `config file ${path}`);
       break;
     }
   }
@@ -360,6 +511,7 @@ Options:
         die(`unknown argument: ${a}`);
     }
   }
+  validateConfig(config, 'configuration');
   return config;
 }
 

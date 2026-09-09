@@ -49,9 +49,17 @@ Item {
 
   // Resolved settings, surfaced so the popup (step 8+) can read them through
   // bar.shell.serviceFor(). Defaults match the plugin's settings table.
-  readonly property string theme: String(setting("theme", "dark"))
-  readonly property string orientation: String(setting("orientation", "vertical"))
-  readonly property string sketch: String(setting("sketch", "random"))
+  // Clamped to the known sets. Passing an unknown value straight through made
+  // the worker reject every run forever ("--theme must be dark, light or
+  // random"), with no way to recover from the popup because the ButtonGroup no
+  // longer matched any option.
+  function oneOf(value, allowed, fallback) {
+    var v = String(value)
+    return allowed.indexOf(v) !== -1 ? v : fallback
+  }
+  readonly property string theme: oneOf(setting("theme", "dark"), ["dark", "light", "random"], "dark")
+  readonly property string orientation: oneOf(setting("orientation", "vertical"), ["horizontal", "vertical"], "vertical")
+  readonly property string sketch: oneOf(setting("sketch", "random"), ["wave", "blob", "oval", "tree", "cloud", "random"], "random")
   readonly property var fonts: setting("fonts", ["Serif"])
   readonly property int fontSize: Math.max(8, Math.min(512, Math.round(Number(setting("fontSize", 96)) || 96)))
   readonly property bool showColor: setting("showColor", false) === true
@@ -61,6 +69,13 @@ Item {
   // wallpaper. Until the popup's consent prompt is accepted, the worker runs
   // with --no-set (render only) and the scheduler stays parked.
   readonly property bool wallpaperConsent: setting("wallpaperConsent", false) === true
+  // Set by the popup when the user accepts the consent prompt, so the run it
+  // starts immediately can set the wallpaper. Persisting is debounced (400ms)
+  // and the shell.json reload adds more on top, so `wallpaperConsent` cannot
+  // possibly be true yet on that turn — without this the first run after
+  // accepting silently rendered with --no-set. Cleared in onExited.
+  property bool consentOverride: false
+  readonly property bool effectiveConsent: wallpaperConsent || consentOverride
   readonly property int updateIntervalMin: Math.max(0, Math.min(1440, Math.round(Number(setting("updateIntervalMin", 30)) || 0)))
   readonly property string language: String(setting("language", ""))
 
@@ -105,10 +120,30 @@ Item {
     repeat: false
     onTriggered: {
       if (!workerProc.running) return
-      console.warn("omashuzhi: worker exceeded " + root.workerWatchdogMs + "ms; killing")
-      try { workerProc.signal(9) } catch (e) { }
-      workerProc.running = false   // `busy` is bound to this, so it clears too
+      console.warn("omashuzhi: worker exceeded " + root.workerWatchdogMs + "ms; terminating")
+      // SIGTERM first, NOT SIGKILL. signal() only reaches the direct child's
+      // pid, and SIGKILL cannot be trapped — killing the wrapper outright
+      // orphaned the tree, which kept holding the flock and made every later
+      // refresh return 75 forever. TERM lets run-bounded.sh's trap reap its
+      // whole tree; escalate only if it is still there.
+      try { workerProc.signal(15) } catch (e) { }
       root.lastError = "timed out"
+      killEscalation.restart()
+    }
+  }
+
+  // Last resort: if SIGTERM did not clear the run, SIGKILL the direct child.
+  // This can orphan descendants (SIGKILL is untrappable), which is exactly why
+  // it is the fallback and not the first move.
+  Timer {
+    id: killEscalation
+    interval: 5000
+    repeat: false
+    onTriggered: {
+      if (!workerProc.running) return
+      console.warn("omashuzhi: worker ignored SIGTERM; sending SIGKILL")
+      try { workerProc.signal(9) } catch (e) { }
+      workerProc.running = false
     }
   }
 
@@ -131,20 +166,35 @@ Item {
     // Plain `timeout` is not sufficient: measured on this machine, it signals
     // only the command it launched, leaving grandchildren (hyprctl, fc-list, a
     // wedged helper) running past the deadline. Exit 124 means "timed out".
-    var args = ["flock", "-n", "-E", "75", root.lockPath,
-                "bash", root.runBounded, String(root.workerTimeoutSec), "5",
+    // run-bounded.sh must be the OUTERMOST process, with flock nested inside
+    // it. Quickshell's Process::signal()/terminate() only signal the direct
+    // child's pid, so whatever sits outermost is the only thing we can kill —
+    // and everything below it would survive. With the wrapper outermost, its
+    // trap reaps the whole tree (flock and the renderer included) on SIGTERM.
+    // The reverse order left a killed run holding the lock forever.
+    var args = ["bash", root.runBounded, String(root.workerTimeoutSec), "5",
+                "flock", "-n", "-E", "75", root.lockPath,
                 "gjs", "-m", root.workerMain]
     args.push("--theme", String(root.theme))
     args.push("--orientation", String(root.orientation))
     args.push("--sketch", String(root.sketch))
-    var families = Array.isArray(root.fonts) ? root.fonts : (root.fonts && typeof root.fonts.length === "number" ? root.fonts : [root.fonts])
+    // A STRING also has a numeric .length, so the old guard let a plain
+    // "DejaVu Sans" through and indexed it per character — producing --font j.
+    // omarchy-bar --json unboxing a one-element array is the documented way to
+    // end up with that shape.
+    var families = Array.isArray(root.fonts)
+      ? root.fonts
+      : (root.fonts && typeof root.fonts !== "string" && typeof root.fonts.length === "number"
+          ? Array.prototype.slice.call(root.fonts)
+          : [root.fonts])
+    families = families.filter(function (f) { return typeof f === "string" && f.length > 0 })
     var font = families.length > 0 ? families[Math.floor(Math.random() * families.length)] : "Serif"
     args.push("--font", String(font))
     args.push("--font-size", String(root.fontSize))
     args.push(root.showColor ? "--show-color" : "--no-show-color")
     // Consent gates the wallpaper write; setWallpaper is the ongoing toggle.
     // Either one off means render-only.
-    args.push((root.wallpaperConsent && root.setWallpaper) ? "--set-wallpaper" : "--no-set")
+    args.push((root.effectiveConsent && root.setWallpaper) ? "--set-wallpaper" : "--no-set")
     return args
   }
 
@@ -198,6 +248,8 @@ Item {
 
     onExited: function(exitCode) {
       workerWatchdog.stop()
+      killEscalation.stop()
+      root.consentOverride = false
       if (exitCode === 75) {
         root.lastError = "already running"
         return
@@ -239,20 +291,35 @@ Item {
   // sets lastRunEpoch itself; this probe only matters across a shell restart,
   // where the freshest PNG still carries its epoch.
   function discoverLastRunEpoch() {
+    // Pass the directory as an ARGUMENT, never interpolated into the script
+    // text: inside double quotes bash still expands $ and backticks, so a HOME
+    // containing $(...) executed, and any HOME with a quote or space broke the
+    // command outright.
     probeProc.command = [
       "bash", root.runBounded, "10", "2",
-      "bash", "-c",
-      "ls -1t \"" + root.cacheDir + "\"/wallpaper-*.png 2>/dev/null | head -1"
+      "bash", "-c", "ls -1t \"$1\"/wallpaper-*.png 2>/dev/null | head -1",
+      "omashuzhi-probe", root.cacheDir
     ]
     probeProc.running = true
     probeWatchdog.restart()
+  }
+
+  // A filename epoch is untrusted input: a planted (or clock-stepped)
+  // wallpaper-dark-9999999999999.png set lastRunEpoch far in the future, making
+  // now - lastRunEpoch negative so the scheduler never fired again. Clamp to
+  // "not in the future".
+  function sanitizeEpoch(value) {
+    var n = Number(value)
+    if (!isFinite(n) || n <= 0) return 0
+    var now = Date.now()
+    return n > now ? now : n
   }
 
   function applyDiscovery(raw) {
     var text = String(raw || "").trim()
     var m = text.match(/wallpaper-(?:dark|light)-(\d+)\.png$/)
     if (m && m[1]) {
-      var epoch = Number(m[1])
+      var epoch = root.sanitizeEpoch(m[1])
       if (epoch > 0) root.lastRunEpoch = epoch
     }
   }
@@ -272,7 +339,7 @@ Item {
     if (!root.entry) return // not known yet, not "all defaults"
     // No scheduled work at all until the user has consented. Enabling the
     // plugin must not start rewriting the background on a timer.
-    if (!root.wallpaperConsent) return
+    if (!root.effectiveConsent) return
     var interval = root.updateIntervalMin
     if (interval <= 0) return // off
     if (Date.now() - root.serviceStart < root.startupGraceMs) return
@@ -296,13 +363,26 @@ Item {
     onTriggered: root.checkScheduled()
   }
 
+  // At most 50 names, each at most 100 chars, for the status payload.
+  readonly property var fontsForStatus: {
+    var out = []
+    var src = Array.isArray(root.fonts) ? root.fonts : []
+    for (var i = 0; i < src.length && i < 50; i++) out.push(String(src[i]).slice(0, 100))
+    if (src.length > 50) out.push("… +" + (src.length - 50) + " more")
+    return out
+  }
+
   function status() {
     return JSON.stringify({
       running: workerProc.running,
       theme: root.theme,
       orientation: root.orientation,
       sketch: root.sketch,
-      fonts: root.fonts,
+      // Clamped like every other field: an unbounded array here closed the IPC
+      // socket outright (PeerClosedError at ~8000 entries), permanently
+      // breaking `omarchy-shell ... status`. Reachable without an attacker —
+      // the picker offers 2000 families and Add has no limit.
+      fonts: root.fontsForStatus,
       fontSize: root.fontSize,
       showColor: root.showColor,
       setWallpaper: root.setWallpaper,

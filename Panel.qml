@@ -16,6 +16,10 @@ Panel {
 
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor("garyliu.omashuzhi-wallpaper") : null
   readonly property string listFontsPath: String(Qt.resolvedUrl("worker/list-fonts.sh")).replace(/^file:\/\//, "")
+  // The font scan spawns fc-list and jq, so it gets the same deadline
+  // wrapper as the renderer: FontPicker's own timeout only SIGTERMs bash
+  // and would leave those grandchildren running.
+  readonly property string runBounded: String(Qt.resolvedUrl("worker/run-bounded.sh")).replace(/^file:\/\//, "")
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(root.fg, 1.4)
@@ -119,7 +123,8 @@ Panel {
       // the first popup open instead.
       if (!root._fontScanArmed) {
         root._fontScanArmed = true
-        fontPicker.optionsCommand = ["bash", root.listFontsPath]
+        fontPicker.optionsCommand = ["bash", root.runBounded, "10", "2",
+                                       "bash", root.listFontsPath]
       }
     }
 
@@ -266,9 +271,15 @@ Panel {
                 fontFamily: root.fFamily
                 onClicked: {
                   root.persistSettings({ wallpaperConsent: true })
-                  // Give the service the new value before the first run, rather
-                  // than racing the shell.json write-and-reload round trip.
-                  if (root.service) Qt.callLater(function() { root.service.refresh() })
+                  // The persist is debounced (400ms) and the shell.json reload
+                  // adds more on top, so the service cannot see the new value
+                  // on this turn. Hand it the decision directly instead of
+                  // racing the round trip — otherwise this first run rendered
+                  // with --no-set and the wallpaper silently did not change.
+                  if (root.service) {
+                    root.service.consentOverride = true
+                    root.service.refresh()
+                  }
                 }
               }
 
@@ -678,10 +689,21 @@ Panel {
     return Model.isFontInstalled(font, fontPicker.resolvedOptions)
   }
 
+  // Bounded: an unbounded list is persisted into shell.json, instantiates a
+  // delegate row each in a long-lived process, and is echoed by the service's
+  // status payload. A Pango family name is nowhere near 200 characters.
+  readonly property int maxFonts: 200
+  readonly property int maxFontNameChars: 200
+
   function addFont() {
     var name = addFontField.text.trim()
     if (!name) return
+    if (name.length > root.maxFontNameChars) name = name.slice(0, root.maxFontNameChars)
     var fonts = Model.asArray(root.setting("fonts", ["Serif"]))
+    if (fonts.length >= root.maxFonts) {
+      addFontField.text = ""
+      return
+    }
     if (fonts.indexOf(name) === -1) fonts.push(name)
     addFontField.text = ""
     root.persistSettings({ fonts: fonts })

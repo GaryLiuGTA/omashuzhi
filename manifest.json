@@ -25,19 +25,33 @@
       "theme": "dark",
       "orientation": "vertical",
       "sketch": "random",
-      "fonts": ["Serif"],
+      "fonts": [
+        "Serif"
+      ],
       "fontSize": 96,
       "showColor": false,
       "setWallpaper": true,
       "updateIntervalMin": 30,
-      "language": ""
+      "language": "",
+      "wallpaperConsent": false
     },
     "schema": [
+      {
+        "key": "wallpaperConsent",
+        "type": "boolean",
+        "label": "Wallpaper consent",
+        "defaultValue": false,
+        "description": "Must be accepted in the popup before the plugin will change the desktop background. Defaults to false; until then refreshes render a PNG only and the scheduler stays parked."
+      },
       {
         "key": "theme",
         "type": "enum",
         "label": "Wallpaper theme",
-        "options": ["dark", "light", "random"],
+        "options": [
+          "dark",
+          "light",
+          "random"
+        ],
         "defaultValue": "dark",
         "description": "The wallpaper's colour palette, not the popup's."
       },
@@ -45,7 +59,10 @@
         "key": "orientation",
         "type": "enum",
         "label": "Text layout",
-        "options": ["horizontal", "vertical"],
+        "options": [
+          "horizontal",
+          "vertical"
+        ],
         "defaultValue": "vertical",
         "description": "Which way the poem runs on the wallpaper."
       },
@@ -53,7 +70,14 @@
         "key": "sketch",
         "type": "enum",
         "label": "Sketch",
-        "options": ["wave", "blob", "oval", "tree", "cloud", "random"],
+        "options": [
+          "wave",
+          "blob",
+          "oval",
+          "tree",
+          "cloud",
+          "random"
+        ],
         "defaultValue": "random",
         "description": "Background drawing behind the poem."
       },
@@ -78,7 +102,7 @@
         "type": "boolean",
         "label": "Set wallpaper",
         "defaultValue": true,
-        "description": "False renders a PNG only and leaves the background untouched."
+        "description": "False renders a PNG only and leaves the background untouched. Note the background is not touched at all until wallpaperConsent is accepted."
       },
       {
         "key": "updateIntervalMin",

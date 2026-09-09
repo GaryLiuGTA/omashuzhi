@@ -42,7 +42,7 @@ export function fetch() {
       author = clean(parsed.author, LIMITS.author);
     if (!content) throw new Error('motto content is empty');
 
-    let body = content.replace(/[，。：；？、！]/g, '\n').replace(/[《》""]/g, ''),
+    let body = content.replace(/[，。：；？、！]/g, '\n').replace(/[《》“”]/g, ''),
       height = Math.round(body.split('\n').reduce((p, x) => Math.max(p, x.length), 1) * 100 / cent),
       wrapped = wrap(`「${origin}`, height);
 
